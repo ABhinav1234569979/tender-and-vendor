@@ -53,11 +53,11 @@ The following Mermaid diagrams show the main components and the evaluation seque
 
 ```mermaid
 flowchart TB
-  A[Incoming files\n(data/incoming)] --> B[Ingest Parsers\n(excel_parser, pdf_parser)]
-  B --> C[Evaluator\n(MultiAgentEvaluator)]
-  C --> D[SQLite Store\n(data/parsed/app.db)]
-  D --> E[Reporting\n(excel_report)]
-  D --> F[UI Review\n(streamlit review_app)]
+  A[Incoming files<br/> (data/incoming)] --> B[Ingest Parsers<br/> (excel_parser, pdf_parser)]
+  B --> C[Evaluator<br/> (MultiAgentEvaluator)]
+  C --> D[SQLite Store<br/> (data/parsed/app.db)]
+  D --> E[Reporting<br/> (excel_report)]
+  D --> F[UI Review<br/> (streamlit review_app)]
   F --> D[Autonomous Feedback Loop]
 ```
 
