@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+streamlit
+pymupdf
+pdfplumber
+pytesseract
+pandas
+openpyxl
+ollama

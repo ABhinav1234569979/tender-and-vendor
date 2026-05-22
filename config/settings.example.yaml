@@ -1,0 +1,18 @@
+paths:
+  data_incoming: "data/incoming"
+  data_parsed: "data/parsed"
+  data_output: "data/output"
+  db_path: "data/parsed/app.db"
+
+model:
+  runtime: "ollama"
+  name: "llama3"
+  temperature: 0.0
+
+ocr:
+  enabled: true
+  tesseract_cmd: ""
+
+security:
+  air_gapped: true
+  outbound_block_required: true
