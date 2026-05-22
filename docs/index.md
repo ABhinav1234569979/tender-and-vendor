@@ -96,6 +96,16 @@ See `src/storage/schema.sql` for the exact tables. The pipeline stores evaluatio
 - The repo includes visual UML PNGs in `docs/uml/` for a visual overview. If you want, I can generate optimized SVGs and smaller PNGs.
 - I can also help configure GitHub Pages to serve this `docs/` folder as the site.
 
+### UML Diagrams (graphics)
+
+- **State machine / high-level flow**
+
+  <a href="docs/uml/State%20Machine%20Diagram%20for%20BHEL-1200.png"><img src="docs/uml/optimized/State%20Machine%20Diagram%20for%20BHEL-600.png" alt="State Machine Diagram for BHEL" style="max-width:100%;height:auto;border:1px solid #444"/></a>
+
+- **Detailed sequence / pipeline**
+
+  <a href="docs/uml/Sequence%20diagram%20for%20BHEL-1200.png"><img src="docs/uml/optimized/Sequence%20diagram%20for%20BHEL-600.png" alt="Sequence diagram for BHEL" style="max-width:100%;height:auto;border:1px solid #444"/></a>
+
 ## Key docs
 - `docs/architecture.md`
 - `docs/folder-structure.md`
