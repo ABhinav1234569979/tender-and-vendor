@@ -1,5 +1,9 @@
 from typing import List, Dict
+from pathlib import Path
 import fitz
+
+
+MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
 def parse_pdf_blocks(pdf_path: str) -> List[Dict]:
@@ -7,6 +11,13 @@ def parse_pdf_blocks(pdf_path: str) -> List[Dict]:
 
     Returns a list of dicts: {"page": int, "bbox": [x0,y0,x1,y1], "text": str}
     """
+    p = Path(pdf_path)
+    if not p.exists():
+        raise FileNotFoundError(f"PDF not found: {pdf_path}")
+    size = p.stat().st_size
+    if size > MAX_PDF_BYTES:
+        raise ValueError(f"PDF too large ({size} bytes) — exceeds {MAX_PDF_BYTES} byte limit")
+
     doc = fitz.open(pdf_path)
     blocks: List[Dict] = []
     for page_no, page in enumerate(doc, start=1):

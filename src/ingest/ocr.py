@@ -1,7 +1,11 @@
 import pytesseract
 from PIL import Image
 import fitz
+from pathlib import Path
 from typing import Optional
+
+
+MAX_PDF_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
 def ocr_pdf_if_needed(pdf_path: str) -> Optional[str]:
@@ -9,6 +13,13 @@ def ocr_pdf_if_needed(pdf_path: str) -> Optional[str]:
 
     If pages are digital (contain text), this function will still run OCR but caller may choose otherwise.
     """
+    p = Path(pdf_path)
+    if not p.exists():
+        return None
+    if p.stat().st_size > MAX_PDF_BYTES:
+        # avoid resource exhaustion on huge files
+        return None
+
     try:
         doc = fitz.open(pdf_path)
     except Exception:
