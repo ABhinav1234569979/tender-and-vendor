@@ -17,6 +17,9 @@ class AgentResult:
     confidence: float
 
 
+_HEURISTIC_EVALUATOR = MultiAgentEvaluator(model_name="llama3")
+
+
 def _normalize_result(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "status": str(payload.get("status", "NO")).strip() or "NO",
@@ -45,8 +48,7 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
 
 
 def _heuristic_result(requirement: str, context: str) -> AgentResult:
-    evaluator = MultiAgentEvaluator(model_name="llama3")
-    result = evaluator._heuristic_eval(requirement, context)
+    result = _HEURISTIC_EVALUATOR._heuristic_eval(requirement, context)
     return AgentResult(
         status=result.status,
         citation=result.citation,
@@ -68,7 +70,7 @@ def _call_ollama(prompt: str, model_name: str, temperature: float) -> Optional[D
 
 
 def run_technical_agent(context: str, requirement: str = "", model_name: str = "llama3") -> Dict[str, Any]:
-    prompt = f"{TECHNICAL_AGENT_PROMPT}\n\nRequirement:\n{requirement}\n\nContext:\n{context}"
+    prompt = TECHNICAL_AGENT_PROMPT.format(requirement=requirement, context=context)
     result = _call_ollama(prompt, model_name, 0.0)
     if result:
         return result
@@ -76,7 +78,7 @@ def run_technical_agent(context: str, requirement: str = "", model_name: str = "
 
 
 def run_risk_agent(context: str, requirement: str = "", model_name: str = "llama3") -> Dict[str, Any]:
-    prompt = f"{RISK_AGENT_PROMPT}\n\nRequirement:\n{requirement}\n\nContext:\n{context}"
+    prompt = RISK_AGENT_PROMPT.format(requirement=requirement, context=context)
     result = _call_ollama(prompt, model_name, 0.0)
     if result:
         return result
@@ -84,7 +86,7 @@ def run_risk_agent(context: str, requirement: str = "", model_name: str = "llama
 
 
 def run_fallback_agent(context: str, requirement: str = "", model_name: str = "llama3") -> Dict[str, Any]:
-    prompt = f"{FALLBACK_AGENT_PROMPT}\n\nRequirement:\n{requirement}\n\nContext:\n{context}"
+    prompt = FALLBACK_AGENT_PROMPT.format(requirement=requirement, context=context)
     result = _call_ollama(prompt, model_name, 0.1)
     if result:
         return result

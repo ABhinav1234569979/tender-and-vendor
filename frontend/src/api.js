@@ -43,8 +43,24 @@ export async function uploadFiles(token, files) {
   return response.json()
 }
 
+export async function getCurrentUser(token) {
+  const response = await request('/me', {}, token)
+  return response.json()
+}
+
+export async function getFiles(token) {
+  const response = await request('/files', {}, token)
+  return response.json()
+}
+
 export async function runPipeline(token) {
   const response = await request('/run-pipeline', { method: 'POST' }, token)
+  return response.json()
+}
+
+export async function getRuns(token, { limit = 25, offset = 0 } = {}) {
+  const params = new URLSearchParams({ limit, offset })
+  const response = await request(`/runs?${params.toString()}`, {}, token)
   return response.json()
 }
 
@@ -53,8 +69,35 @@ export async function getStatus(token, runId) {
   return response.json()
 }
 
-export async function getResults(token) {
-  const response = await request('/results', {}, token)
+export async function getResults(token, filters = {}) {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(filters)) {
+    if (value !== undefined && value !== null && value !== '') {
+      params.set(key, value)
+    }
+  }
+  const path = params.toString() ? `/results?${params.toString()}` : '/results'
+  const response = await request(path, {}, token)
+  return response.json()
+}
+
+export async function getSummary(token) {
+  const response = await request('/summary', {}, token)
+  return response.json()
+}
+
+export async function getAuditLog(token, { limit = 100, offset = 0 } = {}) {
+  const params = new URLSearchParams({ limit, offset })
+  const response = await request(`/audit-log?${params.toString()}`, {}, token)
+  return response.json()
+}
+
+export async function getTrainingQueue(token, { processed, limit = 100, offset = 0 } = {}) {
+  const params = new URLSearchParams({ limit, offset })
+  if (processed !== undefined && processed !== null) {
+    params.set('processed', processed ? '1' : '0')
+  }
+  const response = await request(`/training-queue?${params.toString()}`, {}, token)
   return response.json()
 }
 

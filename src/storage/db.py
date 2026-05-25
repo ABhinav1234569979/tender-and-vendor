@@ -14,6 +14,14 @@ def _ensure_column(conn: sqlite3.Connection, table_name: str, column_name: str, 
     conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_sql}")
 
 
+def _ensure_indexes(conn: sqlite3.Connection) -> None:
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_master_specs_source_spec ON master_specs(source_file, spec_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cm_spec_vendor ON compliance_matrix(spec_id, vendor_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_cm_citation_doc ON compliance_matrix(citation_doc_id)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status ON pipeline_runs(status, updated_at)")
+
+
 def get_connection(db_path: str) -> sqlite3.Connection:
     """Return a hardened sqlite3 connection with safe PRAGMAs applied.
 
@@ -70,3 +78,4 @@ def init_db(db_path: str) -> None:
         _ensure_column(conn, "compliance_matrix", "citation_excerpt", "citation_excerpt TEXT")
         _ensure_column(conn, "compliance_matrix", "citation_page", "citation_page INTEGER")
         _ensure_column(conn, "compliance_matrix", "citation_bbox", "citation_bbox TEXT")
+        _ensure_indexes(conn)

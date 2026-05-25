@@ -25,6 +25,10 @@ def _build_vendor_pdf(path: Path) -> None:
     doc.close()
 
 
+def test_citation_doc_id_handles_page_zero():
+    assert run_pipeline._citation_doc_id("vendorA", [{"page": 0}]) == "vendorA:0:0"
+
+
 def test_pipeline_creates_db_rows_and_report(tmp_path, monkeypatch):
     project_root = tmp_path
     incoming = project_root / "data" / "incoming"

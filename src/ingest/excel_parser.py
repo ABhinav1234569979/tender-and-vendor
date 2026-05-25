@@ -16,28 +16,34 @@ def _normalize(text: str) -> str:
     return _clean(text).lower()
 
 
+SERIAL_HEADERS = {"s. no.", "s.no.", "s no.", "s.no", "s no", "sl. no.", "sl.no.", "sl no.", "sl no", "sr. no.", "sr.no.", "sr no.", "sr no"}
+
+
 def _find_header_row(df: pd.DataFrame) -> Optional[int]:
     max_rows = min(15, len(df))
     for idx in range(max_rows):
         row = [_normalize(df.iloc[idx, c]) for c in range(min(10, len(df.columns)))]
-        if any(val in {"s. no.", "s.no.", "s no.", "s.no", "s no"} for val in row) and any("parameter" in val for val in row):
+        if any(val in SERIAL_HEADERS for val in row) and any("parameter" in val for val in row):
             return idx
         if any("parameter" in val for val in row) and any("spec" in val or "requirement" in val or "detail" in val for val in row):
             return idx
     return None
 
 
-def _detect_columns(header_row: List[str]) -> Tuple[int, int, int]:
+def _detect_columns(header_row: List[str]) -> Tuple[int, int, int, Optional[int]]:
     serial_col = None
     param_col = None
     req_col = None
+    compliance_col = None
     for idx, val in enumerate(header_row):
-        if serial_col is None and (val in {"s. no.", "s.no.", "s no.", "s.no", "s no", "s.no"} or "spec_id" in val):
+        if serial_col is None and (val in SERIAL_HEADERS or "spec_id" in val):
             serial_col = idx
         if param_col is None and "parameter" in val:
             param_col = idx
         if req_col is None and ("requirement" in val or "specification" in val or "detail" in val):
             req_col = idx
+        if compliance_col is None and ("compliance" in val or ("bidder" in val and "y/n" in val)):
+            compliance_col = idx
     if req_col is None:
         for idx, val in enumerate(header_row):
             if "spec" in val and idx != serial_col:
@@ -46,7 +52,7 @@ def _detect_columns(header_row: List[str]) -> Tuple[int, int, int]:
     serial_col = serial_col if serial_col is not None else 0
     param_col = param_col if param_col is not None else min(1, len(header_row) - 1)
     req_col = req_col if req_col is not None else min(2, len(header_row) - 1)
-    return serial_col, param_col, req_col
+    return serial_col, param_col, req_col, compliance_col
 
 
 def _parse_workbook(excel_path: str) -> List[Dict]:
@@ -58,16 +64,15 @@ def _parse_workbook(excel_path: str) -> List[Dict]:
         if df.empty or len(df.columns) < 3:
             continue
 
-        item_name = _clean(df.iloc[0, 2]) if len(df) > 0 and len(df.columns) > 2 else ""
         raw_code = _clean(df.iloc[1, 2]) if len(df) > 1 and len(df.columns) > 2 else ""
         item_code = ""
-        if raw_code and re.match(r"^[A-Z]{1,5}\d{1,5}$", raw_code.strip()):
-            item_code = raw_code.strip()
+        if raw_code and re.match(r"^[A-Za-z]{1,5}\d{1,5}$", raw_code.strip()):
+            item_code = raw_code.strip().upper()
 
         header_row = _find_header_row(df)
         start_row = (header_row + 1) if header_row is not None else 3
         header_vals = [_normalize(df.iloc[header_row, c]) for c in range(len(df.columns))] if header_row is not None else []
-        serial_col, param_col, req_col = _detect_columns(header_vals) if header_vals else (0, 1, 2)
+        serial_col, param_col, req_col, compliance_col = _detect_columns(header_vals) if header_vals else (0, 1, 2, None)
 
         last_serial = ""
         last_param = ""
@@ -80,7 +85,7 @@ def _parse_workbook(excel_path: str) -> List[Dict]:
             if not any([serial_no, parameter_name, requirement]):
                 continue
 
-            if serial_no.lower() in {"s. no.", "s.no.", "s no.", "s.no", "s no", "s.no"}:
+            if serial_no.lower() in SERIAL_HEADERS:
                 continue
 
             if serial_no:
@@ -100,9 +105,6 @@ def _parse_workbook(excel_path: str) -> List[Dict]:
                 spec_id = f"{item_code}-{spec_suffix}"
             else:
                 spec_id = f"{sheet_name}-{spec_suffix}"
-            if item_name and parameter_name and not parameter_name.startswith(item_name):
-                parameter_name = f"{item_name} - {parameter_name}"
-
             row_counter += 1
             row_index = None
             if serial_no and str(serial_no).strip().isdigit():
@@ -115,6 +117,7 @@ def _parse_workbook(excel_path: str) -> List[Dict]:
                     "Spec_ID": spec_id,
                     "Parameter_Name": parameter_name,
                     "company_Requirement": requirement,
+                    "bidder_compliance": _clean(df.iloc[row_idx, compliance_col]) if compliance_col is not None and len(df.columns) > compliance_col else "",
                     "sheet_name": sheet_name,
                     "row_index": row_index,
                 }

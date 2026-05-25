@@ -62,8 +62,8 @@ class MultiAgentEvaluator:
                     break
             if status != "NO":
                 break
-        if citation and len(citation) > 200:
-            citation = f"{citation[:197]}..."
+        if citation and len(citation) > 500:
+            citation = f"{citation[:497]}..."
         return EvaluationResult(status=status, citation=citation or "", reasoning=reasoning, confidence=confidence)
 
     def evaluate_spec(self, vendor_id: str, spec: Dict[str, str], context: str) -> EvaluationResult:
@@ -71,11 +71,11 @@ class MultiAgentEvaluator:
 
         Uses Ollama if available; otherwise falls back to heuristic rules.
         """
-        requirement = spec.get('company_Requirement') or spec.get('company_Requirement') or spec.get('company_requirement') or ''
+        requirement = spec.get('company_Requirement') or spec.get('company_requirement') or ''
         prompt = (
             f"You are a strict auditor. Requirement: {requirement}\n"
             f"Vendor context (extract): {context}\n"
-            "Return JSON: {\"compliance\": \"YES|NO|NEARLY OK\", \"citation\": \"...\", \"reasoning\": \"...\", \"confidence\": 0.0}"
+            "Return JSON: {\"status\": \"YES|NO|NEARLY OK\", \"citation\": \"...\", \"reasoning\": \"...\", \"confidence\": 0.0}"
         )
 
         if self._generate:
@@ -84,7 +84,7 @@ class MultiAgentEvaluator:
                 text = out.get("response") if isinstance(out, dict) else str(out)
                 # try to find JSON in the response
                 j = json.loads(text.strip())
-                return EvaluationResult(status=j.get("compliance", "NO"), citation=j.get("citation", ""), reasoning=j.get("reasoning", ""), confidence=float(j.get("confidence", 0.0)))
+                return EvaluationResult(status=j.get("status", "NO"), citation=j.get("citation", ""), reasoning=j.get("reasoning", ""), confidence=float(j.get("confidence", 0.0)))
             except Exception:
                 # fall back to heuristic
                 return self._heuristic_eval(requirement, context)

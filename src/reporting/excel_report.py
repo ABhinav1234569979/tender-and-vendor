@@ -4,8 +4,62 @@ import os
 import pandas as pd
 import sqlite3
 from openpyxl import load_workbook
+from openpyxl.cell.cell import MergedCell
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+
+
+def _safe_write(ws, row, col, value):
+    cell = ws.cell(row=row, column=col)
+    if isinstance(cell, MergedCell):
+        for merged_range in ws.merged_cells.ranges:
+            if merged_range.min_row <= row <= merged_range.max_row and merged_range.min_col <= col <= merged_range.max_col:
+                ws.cell(row=merged_range.min_row, column=merged_range.min_col, value=value)
+                return
+        return
+    ws.cell(row=row, column=col, value=value)
+
+
+def _find_template_row(ws, header_row: int, spec_id: str, row_index) -> int | None:
+    target = str(spec_id or "").strip()
+    serial_suffix = target.rsplit("-", 1)[-1] if "-" in target else target
+    for row in range(header_row + 1, ws.max_row + 1):
+        values = [str(ws.cell(row=row, column=col).value or "").strip() for col in range(1, ws.max_column + 1)]
+        if target and target in values:
+            return row
+        if serial_suffix and values and values[0] == serial_suffix:
+            return row
+    if row_index:
+        try:
+            candidate = header_row + int(row_index)
+        except (TypeError, ValueError):
+            return None
+        if candidate <= ws.max_row:
+            return candidate
+    return None
+
+
+def _vendor_matches_template(ws, header_row: int, vendor_id: str) -> bool:
+    wanted = str(vendor_id or "").lower()
+    if not wanted:
+        return False
+    for row in range(1, max(1, header_row)):
+        for col in range(1, ws.max_column + 1):
+            value = str(ws.cell(row=row, column=col).value or "").lower()
+            if value and (value in wanted or wanted in value):
+                return True
+    return False
+
+
+def _cell_has_value(ws, row: int, col: int) -> bool:
+    value = ws.cell(row=row, column=col).value
+    return value is not None and str(value).strip() != ""
+
+
+def _write_or_preserve(ws, row: int, col: int, value, preserve_existing: bool) -> None:
+    if preserve_existing and _cell_has_value(ws, row, col):
+        return
+    _safe_write(ws, row, col, value)
 
 
 def _style_and_adjust_columns(wb, sheet_names: List[str]):
@@ -85,6 +139,7 @@ def build_excel_report(output_path: str, db_path: str = "data/parsed/app.db") ->
         "SELECT spec_id, sheet_name, parameter_name, company_requirement, row_index FROM master_specs",
         conn,
     )
+    specs = specs.drop_duplicates(subset=["spec_id"], keep="last") if not specs.empty else specs
     conn.close()
 
     if df.empty:
@@ -180,24 +235,6 @@ def build_excel_report(output_path: str, db_path: str = "data/parsed/app.db") ->
         ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ws.max_column)
         ws.cell(row=1, column=1, value="company Vendor Compliance Matrix")
     _style_and_adjust_columns(wb, ["Matrix", "Details", "Summary"])
-    if "Matrix" in wb.sheetnames:
-        ws = wb["Matrix"]
-        header_vals = [str(cell.value or "").lower() for cell in ws[2]]
-        vendor_start_col = 2
-        if "company_requirement" in header_vals:
-            vendor_start_col = header_vals.index("company_requirement") + 2
-        green = PatternFill(fill_type="solid", fgColor="C6EFCE")
-        yellow = PatternFill(fill_type="solid", fgColor="FFEB9C")
-        red = PatternFill(fill_type="solid", fgColor="FFC7CE")
-        for row in ws.iter_rows(min_row=3, max_row=ws.max_row, min_col=vendor_start_col, max_col=ws.max_column):
-            for cell in row:
-                val = str(cell.value or "").upper()
-                if val.startswith("YES"):
-                    cell.fill = green
-                elif val.startswith("NEARLY"):
-                    cell.fill = yellow
-                elif val.startswith("NO"):
-                    cell.fill = red
     wb.save(output_path)
 
     # Generate per-vendor files
@@ -274,6 +311,7 @@ def build_excel_report(output_path: str, db_path: str = "data/parsed/app.db") ->
                     page_col = append_start
                     ws.cell(row=header_row, column=page_col, value='Page No. in Bid document')
                     append_start += 1
+                preserve_existing = _vendor_matches_template(ws, header_row, vendor_id)
 
                 # For each spec belonging to this sheet, write the vendor's values
                 cur_specs = specs[specs['sheet_name'].fillna('') == sheet_name]
@@ -281,7 +319,9 @@ def build_excel_report(output_path: str, db_path: str = "data/parsed/app.db") ->
                     idx = srow.get('row_index')
                     if not idx:
                         continue
-                    target_row = header_row + int(idx)
+                    target_row = _find_template_row(ws, header_row, srow.get('spec_id'), idx)
+                    if target_row is None:
+                        continue
                     key = (srow.get('spec_id'), vendor_id)
                     val = lookup.get(key, {})
                     status = val.get('status')
@@ -293,6 +333,12 @@ def build_excel_report(output_path: str, db_path: str = "data/parsed/app.db") ->
                     if page_no:
                         reasoning = f"Page {page_no}: {reasoning}" if reasoning else f"Page {page_no}"
 
+                    if preserve_existing and any(
+                        _cell_has_value(ws, target_row, col)
+                        for col in (comp_col, remarks_col, page_col)
+                    ):
+                        continue
+
                     # map status to Y/N
                     ok_val = ''
                     if status and str(status).strip().upper().startswith('YES'):
@@ -300,29 +346,13 @@ def build_excel_report(output_path: str, db_path: str = "data/parsed/app.db") ->
                     elif status and str(status).strip().upper().startswith('NO'):
                         ok_val = 'N'
                     elif status and str(status).strip().upper().startswith('NEARLY'):
-                        ok_val = 'N'
+                        ok_val = 'NEARLY'
                         if reasoning:
                             reasoning = f"NEARLY OK: {reasoning}"
 
-                    # Write values safely into cells that may be part of merged ranges
-                    from openpyxl.cell.cell import MergedCell
-
-                    def safe_write(ws, row, col, value):
-                        cell = ws.cell(row=row, column=col)
-                        if isinstance(cell, MergedCell):
-                            # find the merged range that contains this cell
-                            for mr in ws.merged_cells.ranges:
-                                if mr.min_row <= row <= mr.max_row and mr.min_col <= col <= mr.max_col:
-                                    ws.cell(row=mr.min_row, column=mr.min_col, value=value)
-                                    return
-                            # fallback
-                            return
-                        else:
-                            ws.cell(row=row, column=col, value=value)
-
-                    safe_write(ws, target_row, comp_col, ok_val)
-                    safe_write(ws, target_row, remarks_col, reasoning)
-                    safe_write(ws, target_row, page_col, page_no)
+                    _write_or_preserve(ws, target_row, comp_col, ok_val, preserve_existing)
+                    _write_or_preserve(ws, target_row, remarks_col, reasoning, preserve_existing)
+                    _write_or_preserve(ws, target_row, page_col, page_no, preserve_existing)
 
             _style_and_adjust_columns(vwb, vwb.sheetnames)
             vwb.save(vendor_file)

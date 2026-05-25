@@ -26,27 +26,38 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
 
 
 def _decision_rule(technical: Dict[str, Any], risk: Dict[str, Any], fallback: Dict[str, Any]) -> Dict[str, Any]:
+    agents = [technical, risk, fallback]
     tech_status = str(technical.get("status", "NO")).strip().upper()
     risk_status = str(risk.get("status", "NO")).strip().upper()
     fallback_status = str(fallback.get("status", "NO")).strip().upper()
     status = "NEARLY OK"
-    if tech_status.startswith("YES") and (risk_status.startswith("YES") or fallback_status.startswith("YES")):
+    if tech_status == "YES" and (risk_status == "YES" or fallback_status == "YES"):
         status = "YES"
-    elif tech_status.startswith("NO") and risk_status.startswith("NO"):
+    elif tech_status == "NO" and risk_status == "NO":
         status = "NO"
 
-    chosen = technical if status == tech_status else risk if status == risk_status else fallback
+    chosen = next(
+        (agent for agent in agents if str(agent.get("status", "")).strip().upper() == status),
+        fallback or risk or technical,
+    )
+    confidences = []
+    for agent in agents:
+        try:
+            confidences.append(float(agent.get("confidence", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            confidences.append(0.0)
+    confidence = sum(confidences) / len(confidences) if confidences else 0.0
     return {
         "status": status,
         "citation": chosen.get("citation", ""),
         "reasoning": f"Consensus rule applied: {status}. {chosen.get('reasoning', '')}".strip(),
-        "confidence": float(chosen.get("confidence", 0.0)),
+        "confidence": confidence,
     }
 
 
 def run_consensus_judge(technical: Dict[str, Any], risk: Dict[str, Any], fallback: Dict[str, Any], model_name: str = "llama3") -> Dict[str, Any]:
     payload = [technical, risk, fallback]
-    prompt = f"{JUDGE_PROMPT}\n\nAgent results:\n{json.dumps(payload, ensure_ascii=False)}"
+    prompt = JUDGE_PROMPT.format(agent_results=json.dumps(payload, ensure_ascii=False))
     try:
         from ollama import generate
 

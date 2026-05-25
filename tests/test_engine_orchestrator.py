@@ -30,6 +30,33 @@ def test_dispatch_fast_mode():
     assert isinstance(res["top_blocks"], list)
 
 
+def test_top_blocks_returns_copies_and_verifies_citation(monkeypatch):
+    spec = {"Spec_ID": "S3", "company_Requirement": "Must include TPM module"}
+    blocks = [{"text": "Device includes TPM module.", "page": 0, "bbox": [0, 0, 1, 1]}]
+
+    monkeypatch.setattr(
+        "src.engine.orchestrator.run_technical_agent",
+        lambda *a, **k: {"status": "YES", "confidence": 0.9, "citation": "invented citation"},
+    )
+    monkeypatch.setattr(
+        "src.engine.orchestrator.run_risk_agent",
+        lambda *a, **k: {"status": "YES", "confidence": 0.8, "citation": "invented citation"},
+    )
+    monkeypatch.setattr(
+        "src.engine.orchestrator.run_fallback_agent",
+        lambda *a, **k: {"status": "NO", "confidence": 0.1, "citation": ""},
+    )
+    monkeypatch.setattr(
+        "src.engine.orchestrator.run_consensus_judge",
+        lambda *a, **k: {"status": "YES", "confidence": 0.9, "citation": "invented citation", "reasoning": "mocked"},
+    )
+
+    res = dispatch_spec_vendor(spec, "vendorA", blocks, top_k=1, fast=False)
+
+    assert res["citation"] == "Device includes TPM module."
+    assert res["top_blocks"][0] is not blocks[0]
+
+
 def test_dispatch_full_mode_with_mocked_agents(monkeypatch):
     spec = {"Spec_ID": "S2", "company_Requirement": "Must be certified"}
     blocks = [{"text": "Certified to standard X", "page": 1, "bbox": []}]

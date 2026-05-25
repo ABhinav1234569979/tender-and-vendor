@@ -58,10 +58,20 @@ uvicorn src.app.api:app --reload
 ```
 
 Auth is JWT-based. Use `POST /token` to get a bearer token, then call the protected endpoints:
+- `GET /me`
+- `GET /files`
 - `POST /upload`
 - `POST /run-pipeline`
+- `GET /runs`
+- `GET /runs/{run_id}`
 - `GET /status/{run_id}`
 - `GET /results`
+- `GET /summary`
+- `GET /parsed-document/{doc_id}`
+- `GET /pdf/{file_name}`
+- `POST /override`
+- `GET /audit-log`
+- `GET /training-queue`
 - `GET /report`
 
 ## Run the review UI

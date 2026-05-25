@@ -23,6 +23,36 @@ def _find_vendor_groups(df: pd.DataFrame) -> List[Dict[str, Any]]:
     groups: List[Dict[str, Any]] = []
     row0 = df.iloc[0].tolist() if len(df) > 0 else []
     row1 = df.iloc[1].tolist() if len(df) > 1 else []
+    header_row_idx = None
+    for idx in range(min(10, len(df))):
+        values = [_clean(value).lower() for value in df.iloc[idx].tolist()]
+        if any("compliance" in value or ("bidder" in value and "y/n" in value) for value in values):
+            header_row_idx = idx
+            break
+
+    if header_row_idx is not None:
+        headers = [_clean(value).lower() for value in df.iloc[header_row_idx].tolist()]
+        for col_idx, header in enumerate(headers):
+            if not ("compliance" in header or ("bidder" in header and "y/n" in header)):
+                continue
+            vendor_name = ""
+            for lookup_row in range(header_row_idx - 1, max(-1, header_row_idx - 3), -1):
+                value = _clean(df.iloc[lookup_row, col_idx]) if len(df.columns) > col_idx else ""
+                if value and not any(token in value.lower() for token in ["compliance", "remark", "page"]):
+                    vendor_name = value
+                    break
+            if not vendor_name:
+                vendor_name = f"Vendor_{len(groups) + 1}"
+            groups.append(
+                {
+                    "vendor_name": vendor_name,
+                    "compliance_col": col_idx,
+                    "remarks_col": col_idx + 1,
+                    "page_col": col_idx + 2,
+                }
+            )
+        if groups:
+            return groups
 
     if len(df.columns) == 6:
         groups.append(

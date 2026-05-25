@@ -2,7 +2,6 @@ from pathlib import Path
 import logging
 import json
 import uuid
-from datetime import datetime
 from typing import Callable, Optional
 from src.ingest.excel_parser import parse_master_excel
 from src.ingest.pdf_parser import parse_pdf_blocks
@@ -11,6 +10,28 @@ from src.engine.orchestrator import dispatch_spec_vendor
 from src.reporting.excel_report import build_excel_report
 from src.utils.logging import setup_logging
 from src.utils.paths import PROJECT_ROOT
+
+
+def _load_blocks_from_db(cur, file_name: str) -> list[dict]:
+    rows = cur.execute(
+        "SELECT page, bbox, text FROM parsed_documents WHERE file_name=? ORDER BY page, doc_id",
+        (file_name,),
+    ).fetchall()
+    blocks = []
+    for page, bbox, text in rows:
+        try:
+            parsed_bbox = json.loads(bbox)
+        except Exception:
+            parsed_bbox = bbox
+        blocks.append({"page": page, "bbox": parsed_bbox, "text": text})
+    return blocks
+
+
+def _citation_doc_id(vendor_id: str, top_blocks: list[dict]) -> str | None:
+    if not top_blocks:
+        return None
+    page = top_blocks[0].get("page")
+    return f"{vendor_id}:{page}:0" if page is not None else None
 
 
 def _pick_master_workbook(cfg_in: Path) -> Path | None:
@@ -61,6 +82,7 @@ def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str],
         "INSERT INTO audit_log (action, entity_type, entity_id, details) VALUES (?, ?, ?, ?)",
         ("pipeline_start", "run", run_id, json.dumps({"master": master.name, "vendors": [v.name for v in vendor_files]})),
     )
+    cur.execute("DELETE FROM master_specs WHERE source_file=?", (master.name,))
     for index, spec in enumerate(specs, start=1):
         cur.execute(
             "INSERT OR REPLACE INTO master_specs (source_file, sheet_name, spec_id, parameter_name, company_requirement, row_index) VALUES (?, ?, ?, ?, ?, ?)",
@@ -69,7 +91,7 @@ def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str],
                 spec.get("sheet_name", ""),
                 spec.get("Spec_ID", ""),
                 spec.get("Parameter_Name", ""),
-                spec.get("company_Requirement", spec.get("company_Requirement", spec.get("company_requirement", ""))),
+                spec.get("company_Requirement") or spec.get("company_requirement", ""),
                 spec.get("row_index", index),
             ),
         )
@@ -99,6 +121,8 @@ def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str],
                     "INSERT OR REPLACE INTO parsed_documents (doc_id, file_name, page, bbox, text) VALUES (?, ?, ?, ?, ?)",
                     (doc_id, v.name, b["page"], str(b["bbox"]), b["text"]),
                 )
+            conn.commit()
+            db_blocks = _load_blocks_from_db(cur, v.name)
 
             for spec in specs:
                 spec_id = spec.get("Spec_ID", "")
@@ -112,12 +136,14 @@ def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str],
                     )
                     if progress_cb:
                         progress_cb(progress, message)
+                    conn.commit()
                     continue
 
-                result = dispatch_spec_vendor(spec, vendor_id, blocks)
+                result = dispatch_spec_vendor(spec, vendor_id, db_blocks)
                 citation_bbox = result.get("citation_bbox")
                 if citation_bbox is not None:
                     citation_bbox = json.dumps(citation_bbox)
+                top_blocks = result.get("top_blocks", [])
                 cur.execute(
                     "INSERT OR REPLACE INTO compliance_matrix (spec_id, vendor_id, status, citation, citation_doc_id, citation_excerpt, citation_page, citation_bbox, reasoning, confidence) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
@@ -125,7 +151,7 @@ def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str],
                         result["vendor_id"],
                         result["status"],
                         result["citation"],
-                        result.get("top_blocks", [{}])[0].get("page") and f"{vendor_id}:{result.get('top_blocks', [{}])[0].get('page')}:0",
+                        _citation_doc_id(vendor_id, top_blocks),
                         result["citation"][:1000],
                         result.get("citation_page"),
                         citation_bbox,
@@ -142,8 +168,7 @@ def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str],
                 )
                 if progress_cb:
                     progress_cb(progress, message)
-
-            conn.commit()
+                conn.commit()
 
         cur.execute(
             "UPDATE pipeline_runs SET status=?, progress=?, message=?, updated_at=CURRENT_TIMESTAMP WHERE run_id=?",

@@ -16,6 +16,10 @@ def _tokenize(text: str) -> List[str]:
 
 
 def _score_block(spec_text: str, block_text: str) -> float:
+    return _score_block_with_corpus(spec_text, block_text, [block_text])
+
+
+def _score_block_with_corpus(spec_text: str, block_text: str, corpus_texts: Iterable[str]) -> float:
     spec_tokens = _tokenize(spec_text)
     block_tokens = _tokenize(block_text)
     if not spec_tokens or not block_tokens:
@@ -25,17 +29,53 @@ def _score_block(spec_text: str, block_text: str) -> float:
     common = set(spec_counts) & set(block_counts)
     if not common:
         return 0.0
+    corpus_tokens = [_tokenize(text) for text in corpus_texts]
+    total_docs = max(1, len(corpus_tokens))
+    doc_freq = Counter()
+    for tokens in corpus_tokens:
+        doc_freq.update(set(tokens))
+    avg_doc_len = sum(len(tokens) for tokens in corpus_tokens) / total_docs
+    k1 = 1.5
+    b = 0.75
     score = 0.0
     for token in common:
-        tf = block_counts[token] / len(block_tokens)
-        idf = math.log(1 + len(block_tokens) / (1 + spec_counts[token]))
-        score += tf * idf
+        idf = math.log((total_docs + 1) / (1 + doc_freq[token])) + 1
+        term_freq = block_counts[token]
+        denom = term_freq + k1 * (1 - b + b * (len(block_tokens) / max(1, avg_doc_len)))
+        score += idf * ((term_freq * (k1 + 1)) / denom)
     return score
 
 
+def _verify_citation(citation: str, top_blocks: List[Dict[str, Any]], fallback: str = "") -> str:
+    normalized = " ".join((citation or "").split())
+    if not normalized:
+        return fallback
+    for block in top_blocks:
+        block_text = " ".join(str(block.get("text", "")).split())
+        if normalized and normalized in block_text:
+            return citation
+    return fallback
+
+
 def _top_blocks(spec_text: str, blocks: Iterable[Dict[str, Any]], limit: int = 5) -> List[Dict[str, Any]]:
-    ranked = sorted(blocks, key=lambda block: _score_block(spec_text, block.get("text", "")), reverse=True)
-    return ranked[:limit]
+    block_list = list(blocks)
+    corpus_texts = [block.get("text", "") for block in block_list]
+    ranked = sorted(
+        block_list,
+        key=lambda block: _score_block_with_corpus(spec_text, block.get("text", ""), corpus_texts),
+        reverse=True,
+    )
+    return [dict(block) for block in ranked[:limit]]
+
+
+def _trim_context(context: str, max_chars: int = 4000) -> str:
+    if len(context) <= max_chars:
+        return context
+    trimmed = context[:max_chars]
+    sentence_end = max(trimmed.rfind("."), trimmed.rfind("!"), trimmed.rfind("?"))
+    if sentence_end >= max_chars * 0.6:
+        return trimmed[: sentence_end + 1]
+    return trimmed.rstrip()
 
 
 def dispatch_spec_vendor(
@@ -49,7 +89,6 @@ def dispatch_spec_vendor(
 ) -> Dict[str, Any]:
     requirement = (
         spec.get("company_Requirement")
-        or spec.get("company_Requirement")
         or spec.get("company_requirement")
         or ""
     )
@@ -58,8 +97,7 @@ def dispatch_spec_vendor(
         agents = ["technical", "risk", "fallback"]
     top_blocks = _top_blocks(requirement, blocks, limit=top_k)
     context = "\n\n".join(block.get("text", "") for block in top_blocks)
-    if len(context) > 4000:
-        context = context[:4000]
+    context = _trim_context(context)
 
     if fast:
         # Quick heuristic: check token overlap between requirement and top block
@@ -110,11 +148,12 @@ def dispatch_spec_vendor(
         model_name,
     )
     best_block = top_blocks[0] if top_blocks else {}
+    citation = _verify_citation(judged.get("citation", ""), top_blocks, best_block.get("text", ""))
     return {
         "spec_id": spec.get("Spec_ID", ""),
         "vendor_id": vendor_id,
         "status": judged.get("status", "NO"),
-        "citation": judged.get("citation", best_block.get("text", "")),
+        "citation": citation,
         "reasoning": judged.get("reasoning", ""),
         "confidence": float(judged.get("confidence", 0.0)),
         "citation_page": best_block.get("page"),

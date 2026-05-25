@@ -1,4 +1,5 @@
 from src.engine.agents import run_technical_agent, run_fallback_agent
+from src.engine.prompts import TECHNICAL_AGENT_PROMPT
 
 
 def test_technical_agent_heuristic(monkeypatch):
@@ -26,3 +27,11 @@ def test_fallback_agent_web_search(monkeypatch):
 
     # heuristic should still return a structured response
     assert "status" in res and "confidence" in res
+
+
+def test_prompt_template_injects_requirement_and_context():
+    prompt = TECHNICAL_AGENT_PROMPT.format(requirement="Minimum 8 cores", context="Octa-core architecture")
+
+    assert "Minimum 8 cores" in prompt
+    assert "Octa-core architecture" in prompt
+    assert '{"status": "YES|NO|NEARLY OK"' in prompt

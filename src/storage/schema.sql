@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS master_specs (
     parameter_name TEXT NOT NULL,
     company_requirement TEXT NOT NULL,
     row_index INTEGER,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(source_file, spec_id)
 );
 
 CREATE TABLE IF NOT EXISTS compliance_matrix (
@@ -73,3 +74,18 @@ CREATE TABLE IF NOT EXISTS pipeline_runs (
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+CREATE TABLE IF NOT EXISTS application_users (
+    username TEXT PRIMARY KEY,
+    full_name TEXT NOT NULL DEFAULT '',
+    hashed_password TEXT NOT NULL,
+    disabled INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_master_specs_source_spec ON master_specs(source_file, spec_id);
+CREATE INDEX IF NOT EXISTS idx_cm_spec_vendor ON compliance_matrix(spec_id, vendor_id);
+CREATE INDEX IF NOT EXISTS idx_cm_citation_doc ON compliance_matrix(citation_doc_id);
+CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
+CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status ON pipeline_runs(status, updated_at);

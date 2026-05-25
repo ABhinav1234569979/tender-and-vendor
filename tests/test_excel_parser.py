@@ -39,6 +39,23 @@ def test_parse_master_excel_returns_company_requirement_alias(tmp_path):
     assert rows[0]["company_Requirement"] == rows[0]["company_Requirement"]
 
 
+def test_parse_master_excel_keeps_parameter_clean_and_uppercases_item_code(tmp_path):
+    workbook = tmp_path / "master_lower.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    ws.append([None, None, "NB01 Notebook"])
+    ws.append([None, None, "nb01"])
+    ws.append(["Sl. No.", "Parameter / Feature", "Detailed Specifications"])
+    ws.append([1, "Processor", "Minimum 8 cores"])
+    wb.save(workbook)
+
+    rows = parse_master_excel(str(workbook))
+
+    assert rows[0]["Spec_ID"] == "NB01-1"
+    assert rows[0]["Parameter_Name"] == "Processor"
+
+
 def test_load_master_spec_exact_columns(tmp_path):
     workbook = tmp_path / "master.xlsx"
     _build_master_workbook(workbook)
