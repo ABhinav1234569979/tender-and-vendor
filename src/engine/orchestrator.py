@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Dict, Iterable, List
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 import math
 import re
 
@@ -15,57 +16,97 @@ def _tokenize(text: str) -> List[str]:
     return [token for token in re.findall(r"[a-z0-9]+", (text or "").lower()) if len(token) > 1]
 
 
-def _score_block(spec_text: str, block_text: str) -> float:
-    return _score_block_with_corpus(spec_text, block_text, [block_text])
+def _normalize_text(text: str) -> str:
+    return " ".join((text or "").split())
 
 
-def _score_block_with_corpus(spec_text: str, block_text: str, corpus_texts: Iterable[str]) -> float:
-    spec_tokens = _tokenize(spec_text)
-    block_tokens = _tokenize(block_text)
-    if not spec_tokens or not block_tokens:
+@dataclass(frozen=True)
+class VendorIndex:
+    blocks: List[Dict[str, Any]]
+    block_tokens: List[List[str]]
+    block_token_counts: List[Counter]
+    idf: Dict[str, float]
+    avg_block_len: float
+    block_texts_norm: List[str]
+
+    @classmethod
+    def build(cls, blocks: Sequence[Dict[str, Any]]) -> "VendorIndex":
+        block_list = [dict(block) for block in blocks]
+        block_tokens: List[List[str]] = []
+        block_token_counts: List[Counter] = []
+        block_texts_norm: List[str] = []
+        doc_freq: Counter = Counter()
+        total_len = 0
+
+        for block in block_list:
+            text = str(block.get("text", ""))
+            tokens = _tokenize(text)
+            token_counts = Counter(tokens)
+            block_tokens.append(tokens)
+            block_token_counts.append(token_counts)
+            block_texts_norm.append(_normalize_text(text))
+            total_len += len(tokens)
+            doc_freq.update(set(tokens))
+
+        total_docs = max(1, len(block_tokens))
+        avg_block_len = total_len / total_docs if total_docs else 0.0
+        idf = {
+            token: math.log((total_docs + 1) / (1 + freq)) + 1
+            for token, freq in doc_freq.items()
+        }
+        return cls(
+            blocks=block_list,
+            block_tokens=block_tokens,
+            block_token_counts=block_token_counts,
+            idf=idf,
+            avg_block_len=avg_block_len,
+            block_texts_norm=block_texts_norm,
+        )
+
+
+def _score_block_with_index(spec_counts: Counter, block_counts: Counter, block_len: int, index: VendorIndex) -> float:
+    if not spec_counts or not block_counts:
         return 0.0
-    spec_counts = Counter(spec_tokens)
-    block_counts = Counter(block_tokens)
     common = set(spec_counts) & set(block_counts)
     if not common:
         return 0.0
-    corpus_tokens = [_tokenize(text) for text in corpus_texts]
-    total_docs = max(1, len(corpus_tokens))
-    doc_freq = Counter()
-    for tokens in corpus_tokens:
-        doc_freq.update(set(tokens))
-    avg_doc_len = sum(len(tokens) for tokens in corpus_tokens) / total_docs
     k1 = 1.5
     b = 0.75
+    avg_len = max(1.0, index.avg_block_len)
     score = 0.0
     for token in common:
-        idf = math.log((total_docs + 1) / (1 + doc_freq[token])) + 1
+        idf = index.idf.get(token, 0.0)
+        if idf == 0.0:
+            continue
         term_freq = block_counts[token]
-        denom = term_freq + k1 * (1 - b + b * (len(block_tokens) / max(1, avg_doc_len)))
+        denom = term_freq + k1 * (1 - b + b * (block_len / avg_len))
         score += idf * ((term_freq * (k1 + 1)) / denom)
     return score
 
 
-def _verify_citation(citation: str, top_blocks: List[Dict[str, Any]], fallback: str = "") -> str:
-    normalized = " ".join((citation or "").split())
+def _verify_citation(citation: str, top_blocks_norm: Sequence[str], fallback: str = "") -> str:
+    normalized = _normalize_text(citation)
     if not normalized:
         return fallback
-    for block in top_blocks:
-        block_text = " ".join(str(block.get("text", "")).split())
+    for block_text in top_blocks_norm:
         if normalized and normalized in block_text:
             return citation
     return fallback
 
 
-def _top_blocks(spec_text: str, blocks: Iterable[Dict[str, Any]], limit: int = 5) -> List[Dict[str, Any]]:
-    block_list = list(blocks)
-    corpus_texts = [block.get("text", "") for block in block_list]
-    ranked = sorted(
-        block_list,
-        key=lambda block: _score_block_with_corpus(spec_text, block.get("text", ""), corpus_texts),
-        reverse=True,
-    )
-    return [dict(block) for block in ranked[:limit]]
+def _top_blocks_from_index(spec_text: str, index: VendorIndex, limit: int = 5) -> Tuple[List[Dict[str, Any]], List[str]]:
+    spec_tokens = _tokenize(spec_text)
+    if not spec_tokens:
+        return [], []
+    spec_counts = Counter(spec_tokens)
+    scored: List[Tuple[float, int]] = []
+    for idx, block_counts in enumerate(index.block_token_counts):
+        block_len = len(index.block_tokens[idx])
+        score = _score_block_with_index(spec_counts, block_counts, block_len, index)
+        scored.append((score, idx))
+    scored.sort(key=lambda item: item[0], reverse=True)
+    top_indices = [idx for _, idx in scored[:limit]]
+    return [dict(index.blocks[idx]) for idx in top_indices], [index.block_texts_norm[idx] for idx in top_indices]
 
 
 def _trim_context(context: str, max_chars: int = 4000) -> str:
@@ -82,6 +123,7 @@ def dispatch_spec_vendor(
     spec: Dict[str, Any],
     vendor_id: str,
     blocks: List[Dict[str, Any]],
+    vendor_index: Optional[VendorIndex] = None,
     model_name: str = "qwen2.5-coder:1.5b",
     top_k: int = 5,
     agents: List[str] | None = None,
@@ -95,7 +137,10 @@ def dispatch_spec_vendor(
     logging.info(f"Dispatching spec {spec.get('Spec_ID','')} for vendor {vendor_id} using model {model_name}")
     if agents is None:
         agents = ["technical", "risk", "fallback"]
-    top_blocks = _top_blocks(requirement, blocks, limit=top_k)
+    if vendor_index is None:
+        logging.warning("VendorIndex not provided; building per spec (slow path)")
+        vendor_index = VendorIndex.build(blocks)
+    top_blocks, top_blocks_norm = _top_blocks_from_index(requirement, vendor_index, limit=top_k)
     context = "\n\n".join(block.get("text", "") for block in top_blocks)
     context = _trim_context(context)
 
@@ -148,7 +193,7 @@ def dispatch_spec_vendor(
         model_name,
     )
     best_block = top_blocks[0] if top_blocks else {}
-    citation = _verify_citation(judged.get("citation", ""), top_blocks, best_block.get("text", ""))
+    citation = _verify_citation(judged.get("citation", ""), top_blocks_norm, best_block.get("text", ""))
     return {
         "spec_id": spec.get("Spec_ID", ""),
         "vendor_id": vendor_id,

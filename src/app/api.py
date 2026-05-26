@@ -11,12 +11,35 @@ from fastapi import Depends, FastAPI, File, HTTPException, UploadFile, Request
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from typing import Dict
 
 from src.app.run_pipeline import main as run_pipeline_main
 from src.storage.db import get_connection, init_db
 from src.utils.paths import PROJECT_ROOT
 
-app = FastAPI(title="Vendor Comparison Platform")
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def _lifespan(application: FastAPI):
+    """Clear any stale running/queued pipeline runs on startup."""
+    try:
+        _ensure_app_db()
+        conn = get_connection(str(_db_path()))
+        try:
+            conn.execute(
+                "UPDATE pipeline_runs SET status='failed', message='Interrupted — server restarted', "
+                "updated_at=CURRENT_TIMESTAMP WHERE status IN ('running', 'queued')"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    yield
+
+
+app = FastAPI(title="Vendor Comparison Platform", lifespan=_lifespan)
 LOCAL_ORIGINS = [
     "http://localhost",
     "http://127.0.0.1",
@@ -116,6 +139,15 @@ def require_localhost(request: Request) -> None:
         raise HTTPException(status_code=403, detail="Localhost access only")
 
 
+def get_current_user(request: Request) -> Dict[str, Any]:
+    """Return a minimal user dict. In production, validate a JWT or session token.
+
+    For the local air-gapped deployment this simply returns an anonymous admin
+    user so the API remains functional without a full auth stack.
+    """
+    return {"username": "admin", "full_name": "Administrator", "disabled": False}
+
+
 def _db_path() -> Path:
     return PROJECT_ROOT / "data" / "parsed" / "app.db"
 
@@ -198,6 +230,14 @@ def health(_: None = Depends(require_localhost)) -> dict:
     return {"status": "ok"}
 
 
+@app.get("/me")
+def me_endpoint(
+    _: None = Depends(require_localhost),
+    current_user: Dict[str, Any] = Depends(get_current_user),
+) -> Dict[str, Any]:
+    return current_user
+
+
 @app.get("/files", response_model=FilesResponse)
 def files_endpoint(_: None = Depends(require_localhost)) -> dict:
     incoming = _incoming_dir()
@@ -261,6 +301,23 @@ def run_pipeline_endpoint(_: None = Depends(require_localhost)) -> dict:
     thread = threading.Thread(target=_run_pipeline_job, args=(run_id,), daemon=True)
     thread.start()
     return {"run_id": run_id, "status": "queued"}
+
+
+@app.post("/reset-pipeline")
+def reset_pipeline_endpoint(_: None = Depends(require_localhost)) -> dict:
+    """Mark any stuck running/queued pipeline runs as failed so a new run can start."""
+    _ensure_app_db()
+    conn = get_connection(str(_db_path()))
+    try:
+        conn.execute(
+            "UPDATE pipeline_runs SET status='failed', message='Reset by operator', "
+            "updated_at=CURRENT_TIMESTAMP WHERE status IN ('running', 'queued')"
+        )
+        conn.commit()
+        cleared = conn.execute("SELECT changes()").fetchone()[0]
+    finally:
+        conn.close()
+    return {"status": "ok", "cleared": cleared}
 
 
 @app.get("/runs", response_model=list[PipelineStatusResponse])
@@ -508,5 +565,57 @@ def report_endpoint(_: None = Depends(require_localhost)):
     if not report_path.exists():
         raise HTTPException(status_code=404, detail="Report not found")
     return FileResponse(str(report_path), filename=report_path.name)
+
+
+@app.get("/output-files")
+def output_files_endpoint(_: None = Depends(require_localhost)) -> dict:
+    """List all generated output files available for download."""
+    out_dir = PROJECT_ROOT / "data" / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    files = []
+    for path in sorted(out_dir.iterdir()):
+        if path.is_file() and path.suffix.lower() == ".xlsx":
+            stat = path.stat()
+            files.append({
+                "file_name": path.name,
+                "size_bytes": stat.st_size,
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            })
+    return {"files": files}
+
+
+@app.get("/report/vendor/{vendor_id}")
+def vendor_report_endpoint(vendor_id: str, _: None = Depends(require_localhost)):
+    """Download the per-vendor compliance file."""
+    safe_name = Path(vendor_id).name  # strip any path traversal
+    vendor_path = PROJECT_ROOT / "data" / "output" / f"vendor_{safe_name}.xlsx"
+    if not vendor_path.exists():
+        raise HTTPException(status_code=404, detail=f"Vendor report not found: vendor_{safe_name}.xlsx")
+    return FileResponse(str(vendor_path), filename=vendor_path.name)
+
+
+@app.get("/report/all")
+def all_reports_endpoint(_: None = Depends(require_localhost)):
+    """Download a ZIP archive containing every generated output file."""
+    import io
+    import zipfile
+
+    out_dir = PROJECT_ROOT / "data" / "output"
+    xlsx_files = [p for p in out_dir.iterdir() if p.is_file() and p.suffix.lower() == ".xlsx"]
+    if not xlsx_files:
+        raise HTTPException(status_code=404, detail="No output files found. Run the pipeline first.")
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for p in sorted(xlsx_files):
+            zf.write(p, arcname=p.name)
+    buf.seek(0)
+
+    from fastapi.responses import StreamingResponse
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": "attachment; filename=compliance_reports.zip"},
+    )
 
 

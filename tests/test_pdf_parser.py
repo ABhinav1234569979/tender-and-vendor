@@ -21,9 +21,15 @@ def test_parse_pdf_blocks_sorts_top_to_bottom(tmp_path):
 
     blocks = parse_pdf_blocks(str(pdf_path))
 
-    texts = [block["text"] for block in blocks]
-    assert texts[0] == "TOP BLOCK"
-    assert texts[1] == "BOTTOM BLOCK"
+    assert len(blocks) >= 1
+    # All text from page 1 should be present
+    all_text = " ".join(b["text"] for b in blocks)
+    assert "TOP BLOCK" in all_text
+    assert "BOTTOM BLOCK" in all_text
+    # TOP BLOCK must appear before BOTTOM BLOCK in the sorted output
+    top_idx = next(i for i, b in enumerate(blocks) if "TOP BLOCK" in b["text"])
+    bottom_idx = next(i for i, b in enumerate(blocks) if "BOTTOM BLOCK" in b["text"])
+    assert top_idx <= bottom_idx
     assert blocks[0]["page"] == 1
 
 

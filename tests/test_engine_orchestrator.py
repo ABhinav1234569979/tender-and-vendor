@@ -1,4 +1,4 @@
-from src.engine.orchestrator import _score_block, _top_blocks, dispatch_spec_vendor
+from src.engine.orchestrator import VendorIndex, _score_block_with_index, _top_blocks_from_index, dispatch_spec_vendor
 
 
 def test_score_block_and_top_blocks():
@@ -8,10 +8,14 @@ def test_score_block_and_top_blocks():
         {"text": "No relevant data here.", "page": 2, "bbox": [0, 0, 5, 5]},
     ]
 
-    score = _score_block(spec_text, blocks[0]["text"])
+    index = VendorIndex.build(blocks)
+    from collections import Counter
+    from src.engine.orchestrator import _tokenize
+    spec_counts = Counter(_tokenize(spec_text))
+    score = _score_block_with_index(spec_counts, index.block_token_counts[0], len(index.block_tokens[0]), index)
     assert score > 0.0
 
-    top = _top_blocks(spec_text, blocks, limit=2)
+    top, _ = _top_blocks_from_index(spec_text, index, limit=2)
     assert len(top) == 2
     assert top[0]["text"].startswith("This material")
 

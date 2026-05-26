@@ -41,7 +41,7 @@ def test_pipeline_creates_db_rows_and_report(tmp_path, monkeypatch):
     _build_master_workbook(incoming / "master_spec.xlsx")
     _build_vendor_pdf(incoming / "vendorA.pdf")
 
-    def fake_dispatch(spec, vendor_id, blocks, model_name="llama3"):
+    def fake_dispatch(spec, vendor_id, blocks, **kwargs):
         citation = blocks[0]["text"] if blocks else ""
         return {
             "spec_id": spec["Spec_ID"],
@@ -106,7 +106,7 @@ def test_pipeline_prefers_tech_checklist_workbook(tmp_path, monkeypatch):
             }
         ]
 
-    def fake_dispatch(spec, vendor_id, blocks, model_name="llama3"):
+    def fake_dispatch(spec, vendor_id, blocks, **kwargs):
         return {
             "spec_id": spec["Spec_ID"],
             "vendor_id": vendor_id,

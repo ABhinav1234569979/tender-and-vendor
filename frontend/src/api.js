@@ -27,6 +27,11 @@ export async function getFiles() {
   return response.json()
 }
 
+export async function resetPipeline() {
+  const response = await request('/reset-pipeline', { method: 'POST' })
+  return response.json()
+}
+
 export async function runPipeline() {
   const response = await request('/run-pipeline', { method: 'POST' })
   return response.json()
@@ -100,6 +105,21 @@ export async function applyOverride(payload) {
 export async function downloadReport() {
   const response = await request('/report')
   return response.blob()
+}
+
+export async function downloadAllReports() {
+  const response = await request('/report/all')
+  return response.blob()
+}
+
+export async function downloadVendorReport(vendorId) {
+  const response = await request(`/report/vendor/${encodeURIComponent(vendorId)}`)
+  return response.blob()
+}
+
+export async function getOutputFiles() {
+  const response = await request('/output-files')
+  return response.json()
 }
 
 export { API_BASE }

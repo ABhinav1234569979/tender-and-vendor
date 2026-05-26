@@ -16,6 +16,8 @@ try:
 except Exception:
     MAX_PDF_BYTES = 200 * 1024 * 1024
 
+MIN_BLOCK_CHARS = 20
+
 
 def _tessdata_dir(cmd_path: Path) -> Optional[Path]:
     if not cmd_path.exists():
@@ -80,19 +82,31 @@ def parse_pdf_blocks(pdf_path: str) -> List[Dict]:
 
     doc = fitz.open(pdf_path)
     blocks: List[Dict] = []
-    ocr_available = _tesseract_available()
+    try:
+        max_pages = int(os.environ.get("FAST_PDF_PAGES", "0"))
+    except Exception:
+        max_pages = 0
+    skip_ocr = os.environ.get("FAST_SKIP_OCR", "").strip().lower() in {"1", "true", "yes", "on"}
+    ocr_available = False if skip_ocr else _tesseract_available()
     ocr_skip_logged = False
     for page_no, page in enumerate(doc, start=1):
+        if max_pages and page_no > max_pages:
+            break
         page_blocks = []
         for b in page.get_text("blocks"):
             x0, y0, x1, y1, text, block_no, block_type = b
             text = text.strip()
-            if not text:
+            if not text or len(text) < MIN_BLOCK_CHARS:
                 continue
             page_blocks.append({"page": page_no, "bbox": [x0, y0, x1, y1], "text": text})
 
         if not page_blocks:
             # OCR fallback for scanned pages
+            if skip_ocr:
+                if not ocr_skip_logged:
+                    logging.info("OCR skipped for %s: FAST_SKIP_OCR enabled", pdf_path)
+                    ocr_skip_logged = True
+                continue
             if not ocr_available:
                 if not ocr_skip_logged:
                     logging.warning("OCR skipped for %s: tesseract is not installed or not in PATH", pdf_path)
