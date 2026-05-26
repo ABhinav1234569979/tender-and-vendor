@@ -61,7 +61,27 @@ def test_top_blocks_returns_copies_and_verifies_citation(monkeypatch):
     assert res["top_blocks"][0] is not blocks[0]
 
 
+def test_heuristic_skips_llm_when_confident(monkeypatch):
+    monkeypatch.setenv("LLM_ONLY_UNCERTAIN", "1")
+    monkeypatch.setenv("HEURISTIC_YES_RATIO", "0.2")
+    monkeypatch.setattr("src.engine.orchestrator.is_healthy", lambda: True)
+    monkeypatch.setattr(
+        "src.engine.orchestrator._single_call_dispatch",
+        lambda *a, **k: (_ for _ in ()).throw(AssertionError("LLM should not run")),
+    )
+
+    spec = {"Spec_ID": "S4", "company_Requirement": "TPM module required"}
+    blocks = [
+        {"text": "Device includes TPM module and meets security requirements.", "page": 1, "bbox": []},
+    ]
+    res = dispatch_spec_vendor(spec, "vendorC", blocks, top_k=1, fast=False)
+    assert res["status"] in {"YES", "NO", "NEARLY OK"}
+    assert "LLM" not in res["reasoning"]
+    assert "Heuristic" in res["reasoning"] or "Fast evidence" in res["reasoning"]
+
+
 def test_dispatch_full_mode_with_mocked_agents(monkeypatch):
+    monkeypatch.setenv("LLM_ONLY_UNCERTAIN", "0")
     spec = {"Spec_ID": "S2", "company_Requirement": "Must be certified"}
     blocks = [{"text": "Certified to standard X", "page": 1, "bbox": []}]
 

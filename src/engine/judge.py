@@ -5,6 +5,7 @@ import json
 import re
 
 from src.engine.prompts import JUDGE_PROMPT
+from src.engine.ollama_client import ollama_generate
 
 
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
@@ -58,11 +59,8 @@ def _decision_rule(technical: Dict[str, Any], risk: Dict[str, Any], fallback: Di
 def run_consensus_judge(technical: Dict[str, Any], risk: Dict[str, Any], fallback: Dict[str, Any], model_name: str = "llama3") -> Dict[str, Any]:
     payload = [technical, risk, fallback]
     prompt = JUDGE_PROMPT.format(agent_results=json.dumps(payload, ensure_ascii=False))
-    try:
-        from ollama import generate
-
-        response = generate(model=model_name, prompt=prompt, options={"temperature": 0.0})
-        text = response.get("response") if isinstance(response, dict) else str(response)
+    text = ollama_generate(model=model_name, prompt=prompt, temperature=0.0)
+    if text:
         parsed = _extract_json(text)
         if parsed:
             return {
@@ -71,6 +69,4 @@ def run_consensus_judge(technical: Dict[str, Any], risk: Dict[str, Any], fallbac
                 "reasoning": parsed.get("reasoning", ""),
                 "confidence": float(parsed.get("confidence", 0.0)),
             }
-    except Exception:
-        pass
     return _decision_rule(technical, risk, fallback)

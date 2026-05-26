@@ -61,3 +61,23 @@ Confidence must be a number between 0.0 and 1.0.
 Agent results:
 {agent_results}
 """.strip()
+
+# ── Single-call fast prompt (replaces 4 separate calls for small models) ─────
+# Sends requirement + context once, gets one JSON verdict back.
+# Used by dispatch_spec_vendor when single_call=True (default for <=3B models).
+FAST_EVAL_PROMPT = """
+You are a procurement compliance auditor. Given a requirement and vendor context, output ONE JSON object.
+Output ONLY valid JSON, nothing else:
+{{"status":"YES|NO|NEARLY OK","citation":"verbatim excerpt from context","reasoning":"one sentence","confidence":0.0}}
+
+Rules:
+- status must be exactly YES, NO, or NEARLY OK
+- citation must be copied verbatim from the vendor context below
+- confidence is 0.0-1.0
+- If requirement is clearly met: YES. If partially/equivalent: NEARLY OK. If missing: NO.
+
+Requirement: {requirement}
+
+Vendor context:
+{context}
+""".strip()

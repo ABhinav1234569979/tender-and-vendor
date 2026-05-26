@@ -8,10 +8,10 @@ db = str(PROJECT_ROOT / 'data' / 'parsed' / 'app.db')
 conn = get_connection(db)
 conn.execute(
     "UPDATE pipeline_runs SET status='failed', message='Interrupted — server restarted', "
-    "updated_at=CURRENT_TIMESTAMP WHERE status IN ('running','queued')"
+    "updated_at=CURRENT_TIMESTAMP WHERE lower(trim(status)) IN ('running','queued')"
 )
 conn.commit()
-rows = conn.execute("SELECT run_id, status FROM pipeline_runs WHERE status IN ('running','queued')").fetchall()
+rows = conn.execute("SELECT run_id, status FROM pipeline_runs WHERE lower(trim(status)) IN ('running','queued')").fetchall()
 print(f"Remaining active runs: {rows}")
 print("Done — stale runs cleared.")
 conn.close()

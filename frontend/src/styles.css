@@ -623,3 +623,52 @@ h2 {
   .run-history__head span:nth-child(n+3),
   .run-history__row > *:nth-child(n+3) { display: none; }
 }
+
+/* ── Ollama status chip ─────────────────────────────────────────────────── */
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.ollama-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 20px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.ollama-ok {
+  background: #e8f5ee;
+  color: #2e7d5e;
+  border: 1px solid #a8d5bb;
+}
+
+.ollama-down {
+  background: #fff0f2;
+  color: var(--danger);
+  border: 1px solid #f5b8c0;
+}
+
+.ollama-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.ollama-ok .ollama-dot {
+  background: #2e7d5e;
+  animation: pulse-badge 2s ease-in-out infinite;
+}
+
+.ollama-down .ollama-dot {
+  background: var(--danger);
+}

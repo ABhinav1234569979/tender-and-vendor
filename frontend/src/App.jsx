@@ -5,6 +5,7 @@ import {
   downloadReport,
   downloadVendorReport,
   getFiles,
+  getOllamaStatus,
   getOutputFiles,
   getResults,
   getRuns,
@@ -61,6 +62,7 @@ export default function App() {
   const [summary, setSummary] = useState(null)
   const [results, setResults] = useState([])
   const [runHistory, setRunHistory] = useState([])
+  const [ollamaStatus, setOllamaStatus] = useState(null)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -115,13 +117,14 @@ export default function App() {
 
   async function refreshDashboard() {
     try {
-      const [fp, sp, rp, op] = await Promise.all([
-        getFiles(), getSummary(), getResults({ limit: 10 }), getOutputFiles(),
+      const [fp, sp, rp, op, os] = await Promise.all([
+        getFiles(), getSummary(), getResults({ limit: 10 }), getOutputFiles(), getOllamaStatus(),
       ])
       setFiles(fp.incoming || [])
       setSummary(sp)
       setResults(rp.results || [])
       setOutputFiles(op.files || [])
+      setOllamaStatus(os)
       refreshRunHistory()
     } catch (_) {}
   }
@@ -227,7 +230,18 @@ export default function App() {
             <p className="eyebrow">Tender &amp; Vendor Compliance</p>
             <h1>Compliance Pipeline Console</h1>
           </div>
-          <div className="api-chip">{API_BASE}</div>
+          <div className="topbar-right">
+            {ollamaStatus && (
+              <div className={`ollama-chip ${ollamaStatus.healthy ? 'ollama-ok' : 'ollama-down'}`}
+                title={ollamaStatus.healthy ? `Models: ${ollamaStatus.models.join(', ')}` : 'LLM server not reachable — using heuristic fallback'}>
+                <span className="ollama-dot" />
+                {ollamaStatus.healthy
+                  ? `LLM · ${ollamaStatus.selected_model || ollamaStatus.models[0] || 'ready'}`
+                  : 'LLM offline'}
+              </div>
+            )}
+            <div className="api-chip">{API_BASE}</div>
+          </div>
         </header>
 
         {/* ── pipeline progress card ── */}

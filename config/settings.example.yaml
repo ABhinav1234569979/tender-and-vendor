@@ -5,9 +5,14 @@ paths:
   db_path: "data/parsed/app.db"
 
 model:
-  runtime: "ollama"
-  name: "llama3"
+  runtime: "lmstudio"
+  name: "qwen3.6-35b-a3b"
   temperature: 0.0
+
+llm:
+  backend: "lmstudio"
+  host: "http://10.5.65.131:1234"
+  timeout: 120
 
 ocr:
   enabled: true

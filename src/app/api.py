@@ -20,6 +20,24 @@ from src.utils.paths import PROJECT_ROOT
 from contextlib import asynccontextmanager
 
 
+def _warm_ollama() -> None:
+    """Warm the local Ollama model without blocking API startup."""
+    if os.environ.get("OLLAMA_WARMUP", "1").strip().lower() not in {"1", "true", "yes"}:
+        return
+    try:
+        from src.engine.ollama_client import default_model, ollama_generate
+
+        model = default_model()
+        ollama_generate(
+            model,
+            'Return only this JSON: {"status":"YES","citation":"warmup","reasoning":"warmup","confidence":1.0}',
+            temperature=0.0,
+            max_tokens=40,
+        )
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def _lifespan(application: FastAPI):
     """Clear any stale running/queued pipeline runs on startup."""
@@ -36,22 +54,36 @@ async def _lifespan(application: FastAPI):
             conn.close()
     except Exception:
         pass
+    threading.Thread(target=_warm_ollama, daemon=True).start()
     yield
 
 
 app = FastAPI(title="Vendor Comparison Platform", lifespan=_lifespan)
-LOCAL_ORIGINS = [
-    "http://localhost",
-    "http://127.0.0.1",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:8501",
-    "http://127.0.0.1:8501",
-]
+
+# ---------------------------------------------------------------------------
+# Network / CORS configuration
+# Read ALLOWED_HOSTS from env (comma-separated IPs/hostnames).
+# Defaults to localhost-only. Set to the machine's LAN IP to allow network access.
+# Example:  ALLOWED_HOSTS=10.5.51.82
+# ---------------------------------------------------------------------------
+_ALLOWED_HOSTS: set[str] = {"127.0.0.1", "::1", "localhost"}
+_env_hosts = os.environ.get("ALLOWED_HOSTS", "")
+for _h in _env_hosts.split(","):
+    _h = _h.strip()
+    if _h:
+        _ALLOWED_HOSTS.add(_h)
+
+# Build CORS origin list from allowed hosts
+_CORS_ORIGINS: list[str] = []
+for _h in _ALLOWED_HOSTS:
+    for _port in ("", ":5173", ":8088", ":8501"):
+        _CORS_ORIGINS.append(f"http://{_h}{_port}")
+        _CORS_ORIGINS.append(f"https://{_h}{_port}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=LOCAL_ORIGINS,
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\\d+)?",
+    allow_origins=list(set(_CORS_ORIGINS)),
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -134,9 +166,29 @@ class OverrideResponse(BaseModel):
 
 
 def require_localhost(request: Request) -> None:
+    """Allow requests from any host in _ALLOWED_HOSTS, or any RFC-1918 LAN address.
+
+    RFC-1918 private ranges:
+      10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+    This keeps the API air-gapped (no public internet access) while allowing
+    all machines on the local network without needing to enumerate every IP.
+    """
     host = request.client.host if request.client else ""
-    if host not in {"127.0.0.1", "::1", "localhost"}:
-        raise HTTPException(status_code=403, detail="Localhost access only")
+
+    # always allow explicit allowlist
+    if host in _ALLOWED_HOSTS:
+        return
+
+    # allow any private LAN address
+    import ipaddress
+    try:
+        addr = ipaddress.ip_address(host)
+        if addr.is_private or addr.is_loopback:
+            return
+    except ValueError:
+        pass  # not a valid IP — fall through to deny
+
+    raise HTTPException(status_code=403, detail=f"Access denied from {host}")
 
 
 def get_current_user(request: Request) -> Dict[str, Any]:
@@ -228,6 +280,27 @@ def _run_pipeline_job(run_id: str) -> None:
 @app.get("/health", response_model=HealthResponse)
 def health(_: None = Depends(require_localhost)) -> dict:
     return {"status": "ok"}
+
+
+@app.get("/ollama-status")
+def ollama_status_endpoint(_: None = Depends(require_localhost)) -> dict:
+    """Check Ollama connectivity and return available models."""
+    from src.engine.ollama_client import (
+        LLM_BACKEND,
+        OLLAMA_HOST,
+        default_model,
+        is_healthy,
+        list_models,
+    )
+    healthy = is_healthy()
+    models = list_models() if healthy else []
+    return {
+        "healthy": healthy,
+        "host": OLLAMA_HOST,
+        "backend": LLM_BACKEND,
+        "models": models,
+        "selected_model": default_model() if healthy else None,
+    }
 
 
 @app.get("/me")
@@ -559,8 +632,96 @@ def override_endpoint(payload: OverrideRequest, _: None = Depends(require_localh
     return {"status": "ok", "spec_id": spec_id, "vendor_id": vendor_id, "new_status": new_status}
 
 
-@app.get("/report")
-def report_endpoint(_: None = Depends(require_localhost)):
+@app.post("/retrain")
+def retrain_endpoint(_: None = Depends(require_localhost)) -> dict:
+    """Process unprocessed training_queue rows and extract new heuristic rules.
+
+    This is the human-in-the-loop retraining trigger.  Call it after applying
+    overrides to immediately improve the heuristic evaluator for the next run.
+    """
+    from src.evaluator import retrain_from_feedback
+    _ensure_app_db()
+    added = retrain_from_feedback(db_path=str(_db_path()))
+    # also log to audit
+    conn = get_connection(str(_db_path()))
+    try:
+        conn.execute(
+            "INSERT INTO audit_log (action, entity_type, entity_id, details) VALUES (?, ?, ?, ?)",
+            ("retrain", "heuristic_rules", "manual", json.dumps({"new_rules": added})),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"status": "ok", "new_rules_added": added}
+
+
+@app.get("/heuristic-rules")
+def heuristic_rules_endpoint(
+    limit: int = 200,
+    offset: int = 0,
+    _: None = Depends(require_localhost),
+) -> dict:
+    """List all heuristic rules currently in use."""
+    limit = max(1, min(limit, 500))
+    _ensure_app_db()
+    conn = get_connection(str(_db_path()))
+    try:
+        count = conn.execute("SELECT COUNT(*) FROM heuristic_rules").fetchone()[0]
+        rows = _dict_rows(
+            conn,
+            "SELECT id, rule_type, pattern, verdict, weight, hit_count, source, created_at "
+            "FROM heuristic_rules ORDER BY weight DESC, hit_count DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+    finally:
+        conn.close()
+    return {"rules": rows, "count": count}
+
+
+@app.post("/heuristic-rules")
+def add_heuristic_rule_endpoint(
+    payload: dict,
+    _: None = Depends(require_localhost),
+) -> dict:
+    """Manually add a heuristic rule."""
+    pattern = str(payload.get("pattern", "")).strip().lower()
+    verdict = str(payload.get("verdict", "")).strip().upper()
+    weight = float(payload.get("weight", 1.0))
+    if not pattern or verdict not in {"YES", "NO", "NEARLY OK"}:
+        raise HTTPException(status_code=400, detail="pattern and verdict (YES/NO/NEARLY OK) required")
+    _ensure_app_db()
+    conn = get_connection(str(_db_path()))
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO heuristic_rules (rule_type, pattern, verdict, weight, source) "
+            "VALUES ('keyword', ?, ?, ?, 'manual')",
+            (pattern, verdict, weight),
+        )
+        conn.execute(
+            "INSERT INTO audit_log (action, entity_type, entity_id, details) VALUES (?, ?, ?, ?)",
+            ("add_rule", "heuristic_rules", pattern, json.dumps({"verdict": verdict, "weight": weight})),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"status": "ok", "pattern": pattern, "verdict": verdict}
+
+
+@app.get("/format-profiles")
+def format_profiles_endpoint(_: None = Depends(require_localhost)) -> dict:
+    """List all detected format profiles (one per workbook sheet)."""
+    _ensure_app_db()
+    conn = get_connection(str(_db_path()))
+    try:
+        rows = _dict_rows(
+            conn,
+            "SELECT file_name, sheet_name, profile_json, created_at FROM format_profiles "
+            "ORDER BY file_name, sheet_name",
+        )
+    finally:
+        conn.close()
+    return {"profiles": rows, "count": len(rows)}
+
     report_path = _report_path()
     if not report_path.exists():
         raise HTTPException(status_code=404, detail="Report not found")
@@ -617,5 +778,4 @@ def all_reports_endpoint(_: None = Depends(require_localhost)):
         media_type="application/zip",
         headers={"Content-Disposition": "attachment; filename=compliance_reports.zip"},
     )
-
 

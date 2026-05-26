@@ -6,6 +6,7 @@ import json
 import re
 
 from src.engine.prompts import FALLBACK_AGENT_PROMPT, RISK_AGENT_PROMPT, TECHNICAL_AGENT_PROMPT
+from src.engine.ollama_client import ollama_generate
 from src.evaluator import MultiAgentEvaluator
 
 
@@ -58,15 +59,12 @@ def _heuristic_result(requirement: str, context: str) -> AgentResult:
 
 
 def _call_ollama(prompt: str, model_name: str, temperature: float) -> Optional[Dict[str, Any]]:
-    try:
-        from ollama import generate
-
-        response = generate(model=model_name, prompt=prompt, options={"temperature": temperature})
-        text = response.get("response") if isinstance(response, dict) else str(response)
-        payload = _extract_json(text)
-        return _normalize_result(payload or {}) if payload else None
-    except Exception:
+    """Call Ollama via the singleton client (connection reuse + cache)."""
+    text = ollama_generate(model=model_name, prompt=prompt, temperature=temperature)
+    if not text:
         return None
+    payload = _extract_json(text)
+    return _normalize_result(payload) if payload else None
 
 
 def run_technical_agent(context: str, requirement: str = "", model_name: str = "llama3") -> Dict[str, Any]:

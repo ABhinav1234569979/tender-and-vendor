@@ -1,8 +1,34 @@
+"""Dynamic Excel parser.
+
+Uses FormatDetector to auto-detect header rows and column positions for any
+workbook layout.  Falls back to the legacy keyword scan if detection confidence
+is low.  Detected profiles are saved to the DB so the system learns from each
+new file format it encounters.
+"""
+from __future__ import annotations
+
+import logging
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-import re
 
 import pandas as pd
+
+from src.ingest.format_detector import (
+    ColumnMap,
+    FormatProfile,
+    detect_format,
+    load_format_profile,
+    save_format_profile,
+)
+
+logger = logging.getLogger(__name__)
+
+SERIAL_HEADERS = {
+    "s. no.", "s.no.", "s no.", "s.no", "s no",
+    "sl. no.", "sl.no.", "sl no.", "sl no",
+    "sr. no.", "sr.no.", "sr no.", "sr no",
+}
 
 
 def _clean(value) -> str:
@@ -12,124 +38,139 @@ def _clean(value) -> str:
     return "" if text.lower() == "nan" else text
 
 
-def _normalize(text: str) -> str:
-    return _clean(text).lower()
-
-
-SERIAL_HEADERS = {"s. no.", "s.no.", "s no.", "s.no", "s no", "sl. no.", "sl.no.", "sl no.", "sl no", "sr. no.", "sr.no.", "sr no.", "sr no"}
-
-
-def _find_header_row(df: pd.DataFrame) -> Optional[int]:
-    max_rows = min(15, len(df))
-    for idx in range(max_rows):
-        row = [_normalize(df.iloc[idx, c]) for c in range(min(10, len(df.columns)))]
-        if any(val in SERIAL_HEADERS for val in row) and any("parameter" in val for val in row):
-            return idx
-        if any("parameter" in val for val in row) and any("spec" in val or "requirement" in val or "detail" in val for val in row):
-            return idx
-    return None
-
-
-def _detect_columns(header_row: List[str]) -> Tuple[int, int, int, Optional[int]]:
-    serial_col = None
-    param_col = None
-    req_col = None
-    compliance_col = None
-    for idx, val in enumerate(header_row):
-        if serial_col is None and (val in SERIAL_HEADERS or "spec_id" in val):
-            serial_col = idx
-        if param_col is None and "parameter" in val:
-            param_col = idx
-        if req_col is None and ("requirement" in val or "specification" in val or "detail" in val):
-            req_col = idx
-        if compliance_col is None and ("compliance" in val or ("bidder" in val and "y/n" in val)):
-            compliance_col = idx
-    if req_col is None:
-        for idx, val in enumerate(header_row):
-            if "spec" in val and idx != serial_col:
-                req_col = idx
-                break
-    serial_col = serial_col if serial_col is not None else 0
-    param_col = param_col if param_col is not None else min(1, len(header_row) - 1)
-    req_col = req_col if req_col is not None else min(2, len(header_row) - 1)
-    return serial_col, param_col, req_col, compliance_col
-
-
-def _parse_workbook(excel_path: str) -> List[Dict]:
+def _parse_sheet(
+    df: pd.DataFrame,
+    sheet_name: str,
+    profile: FormatProfile,
+) -> List[Dict]:
+    """Parse one sheet using a detected FormatProfile."""
     records: List[Dict] = []
-    workbook = pd.ExcelFile(excel_path)
+    cm = profile.col_map
+    n_cols = df.shape[1]
 
-    for sheet_name in workbook.sheet_names:
-        df = pd.read_excel(workbook, sheet_name=sheet_name, header=None, dtype=str).fillna("")
-        if df.empty or len(df.columns) < 3:
+    last_serial = ""
+    last_param = ""
+    row_counter = 0
+    seen_spec_ids: Dict[str, int] = {}
+
+    for row_idx in range(profile.data_start_row, df.shape[0]):
+        serial_no    = _clean(df.iloc[row_idx, cm.serial_col]) if cm.serial_col < n_cols else ""
+        parameter    = _clean(df.iloc[row_idx, cm.param_col])  if cm.param_col  < n_cols else ""
+        requirement  = _clean(df.iloc[row_idx, cm.req_col])    if cm.req_col    < n_cols else ""
+        compliance   = _clean(df.iloc[row_idx, cm.comply_col]) if cm.comply_col is not None and cm.comply_col < n_cols else ""
+
+        if not any([serial_no, parameter, requirement]):
+            continue
+        if serial_no.lower() in SERIAL_HEADERS:
             continue
 
-        raw_code = _clean(df.iloc[1, 2]) if len(df) > 1 and len(df.columns) > 2 else ""
-        item_code = ""
-        if raw_code and re.match(r"^[A-Za-z]{1,5}\d{1,5}$", raw_code.strip()):
-            item_code = raw_code.strip().upper()
+        # carry-forward for merged cells
+        if serial_no:
+            last_serial = serial_no
+        else:
+            serial_no = last_serial
+        if parameter:
+            last_param = parameter
+        else:
+            parameter = last_param
 
-        header_row = _find_header_row(df)
-        start_row = (header_row + 1) if header_row is not None else 3
-        header_vals = [_normalize(df.iloc[header_row, c]) for c in range(len(df.columns))] if header_row is not None else []
-        serial_col, param_col, req_col, compliance_col = _detect_columns(header_vals) if header_vals else (0, 1, 2, None)
+        row_counter += 1
+        # row_index: prefer numeric serial, else counter
+        if serial_no and re.match(r"^\d+$", serial_no.strip()):
+            row_index = int(serial_no.strip())
+        else:
+            row_index = row_counter
 
-        last_serial = ""
-        last_param = ""
-        row_counter = 0
-        for row_idx in range(start_row, len(df)):
-            serial_no = _clean(df.iloc[row_idx, serial_col]) if len(df.columns) > serial_col else ""
-            parameter_name = _clean(df.iloc[row_idx, param_col]) if len(df.columns) > param_col else ""
-            requirement = _clean(df.iloc[row_idx, req_col]) if len(df.columns) > req_col else ""
+        # build spec_id
+        spec_suffix = serial_no or str(row_idx + 1)
+        if serial_no and re.search(r"[A-Za-z]", serial_no):
+            base_spec_id = serial_no
+        elif profile.item_code:
+            base_spec_id = f"{profile.item_code}-{spec_suffix}"
+        else:
+            base_spec_id = f"{sheet_name}-{spec_suffix}"
 
-            if not any([serial_no, parameter_name, requirement]):
-                continue
+        seen_count = seen_spec_ids.get(base_spec_id, 0)
+        seen_spec_ids[base_spec_id] = seen_count + 1
+        spec_id = base_spec_id if seen_count == 0 else f"{base_spec_id}-{row_idx + 1}"
 
-            if serial_no.lower() in SERIAL_HEADERS:
-                continue
-
-            if serial_no:
-                last_serial = serial_no
-            else:
-                serial_no = last_serial
-
-            if parameter_name:
-                last_param = parameter_name
-            else:
-                parameter_name = last_param
-
-            spec_suffix = serial_no or f"{row_idx + 1}"
-            if serial_no and re.search(r"[A-Za-z]", serial_no):
-                spec_id = serial_no
-            elif item_code:
-                spec_id = f"{item_code}-{spec_suffix}"
-            else:
-                spec_id = f"{sheet_name}-{spec_suffix}"
-            row_counter += 1
-            row_index = None
-            if serial_no and str(serial_no).strip().isdigit():
-                row_index = int(str(serial_no).strip())
-            else:
-                row_index = row_counter
-
-            records.append(
-                {
-                    "Spec_ID": spec_id,
-                    "Parameter_Name": parameter_name,
-                    "company_Requirement": requirement,
-                    "bidder_compliance": _clean(df.iloc[row_idx, compliance_col]) if compliance_col is not None and len(df.columns) > compliance_col else "",
-                    "sheet_name": sheet_name,
-                    "row_index": row_index,
-                }
-            )
+        records.append({
+            "Spec_ID": spec_id,
+            "Parameter_Name": parameter,
+            "company_Requirement": requirement,
+            "bidder_compliance": compliance,
+            "sheet_name": sheet_name,
+            "row_index": row_index,
+        })
 
     return records
 
 
-def parse_master_excel(excel_path: str) -> List[Dict]:
+def _parse_workbook(excel_path: str, db_conn=None) -> List[Dict]:
+    records: List[Dict] = []
+    file_name = Path(excel_path).name
+
+    # Try to load cached profile from DB first
+    cached_profiles: Dict[str, FormatProfile] = {}
+    if db_conn is not None:
+        try:
+            cached_profiles = load_format_profile(db_conn, file_name)
+        except Exception:
+            pass
+
+    # Always re-detect (cheap) and compare confidence
+    detected_profiles = detect_format(excel_path)
+
+    # Merge: use detected if confidence >= cached or no cache
+    profiles: Dict[str, FormatProfile] = {}
+    for sheet, detected in detected_profiles.items():
+        cached = cached_profiles.get(sheet)
+        if cached is None or detected.confidence >= cached.confidence:
+            profiles[sheet] = detected
+        else:
+            profiles[sheet] = cached
+            logger.debug("Using cached profile for %s/%s (conf=%.2f)", file_name, sheet, cached.confidence)
+
+    # Persist updated profiles
+    if db_conn is not None:
+        try:
+            save_format_profile(db_conn, file_name, profiles)
+        except Exception as exc:
+            logger.warning("Could not save format profiles: %s", exc)
+
+    try:
+        xls = pd.ExcelFile(excel_path)
+    except Exception as exc:
+        logger.error("Cannot open workbook %s: %s", excel_path, exc)
+        return records
+
+    for sheet_name in xls.sheet_names:
+        try:
+            df = pd.read_excel(xls, sheet_name=sheet_name, header=None, dtype=str).fillna("")
+            if df.empty or df.shape[1] < 2:
+                continue
+
+            profile = profiles.get(sheet_name)
+            if profile is None:
+                logger.warning("No profile for sheet %s — skipping", sheet_name)
+                continue
+
+            sheet_records = _parse_sheet(df, sheet_name, profile)
+            records.extend(sheet_records)
+            logger.info(
+                "Parsed sheet %s: %d records (conf=%.2f)",
+                sheet_name, len(sheet_records), profile.confidence,
+            )
+        except Exception as exc:
+            logger.warning("Failed to parse sheet %s: %s", sheet_name, exc)
+
+    return records
+
+
+def parse_master_excel(excel_path: str, db_conn=None) -> List[Dict]:
     """Load master spec checklist from Excel.
 
-    Supports multi-sheet company checklists and a simplified single-sheet format.
-    Returns list of dicts.
+    Dynamically detects header rows and column positions for any workbook
+    layout.  Pass db_conn to enable profile caching and learning.
     """
-    return _parse_workbook(excel_path)
+    return _parse_workbook(excel_path, db_conn=db_conn)

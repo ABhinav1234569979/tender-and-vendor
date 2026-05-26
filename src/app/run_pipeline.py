@@ -1,16 +1,19 @@
-from pathlib import Path
+﻿from pathlib import Path
 import logging
 import json
 import os
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Optional
 from src.ingest.excel_parser import parse_master_excel
 from src.ingest.pdf_parser import parse_pdf_blocks
 from src.storage.db import init_db, get_connection
-from src.engine.orchestrator import VendorIndex, dispatch_spec_vendor
+from src.engine.ollama_client import default_model
+from src.engine.orchestrator import VendorIndex, dispatch_spec_vendor, get_dispatch_stats, reset_dispatch_stats
 from src.reporting.excel_report import build_excel_report
 from src.utils.logging import setup_logging
 from src.utils.paths import PROJECT_ROOT
+from src.evaluator import retrain_from_feedback
 
 
 def _load_blocks_from_db(cur, file_name: str) -> list[dict]:
@@ -54,12 +57,19 @@ def _bool_env(name: str, default: bool = False) -> bool:
 
 def _int_env(name: str, default: int = 0) -> int:
     value = os.environ.get(name)
-    if value is None:
+    if value is None or value.strip() == "":
         return default
     try:
         return int(value)
     except ValueError:
         return default
+
+
+def _bounded_workers(name: str, default: int, upper: int) -> int:
+    configured = _int_env(name, default)
+    if configured <= 0:
+        configured = default
+    return max(1, min(configured, max(1, upper)))
 
 
 def _update_progress(cur, conn, run_id: str, progress: float, message: str, progress_cb=None) -> None:
@@ -88,12 +98,27 @@ def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str],
     init_db(str(cfg_db))
     run_id = run_id or str(uuid.uuid4())
 
-    # locate master spec
+    # â”€â”€ Auto-retrain from any pending human feedback before this run â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    pending = get_connection(str(cfg_db)).execute(
+        "SELECT COUNT(*) FROM training_queue WHERE processed=0"
+    ).fetchone()[0]
+    if pending:
+        new_rules = retrain_from_feedback(db_path=str(cfg_db))
+        logging.info("Auto-retrain: %d new rules from %d pending feedback items", new_rules, pending)
+
+    # locate master spec â€” pass db_conn so format profiles are cached/learned
     master = _pick_master_workbook(cfg_in)
     if master is None:
         logging.error("No master spec .xlsx found in data/incoming")
         return
-    specs = parse_master_excel(str(master))
+    conn_for_profile = get_connection(str(cfg_db))
+    try:
+        specs = parse_master_excel(str(master), db_conn=conn_for_profile)
+    except TypeError:
+        # monkeypatched or older version that doesn't accept db_conn
+        specs = parse_master_excel(str(master))
+    finally:
+        conn_for_profile.close()
 
     fast_mode = _bool_env("FAST_MODE")
     if fast_mode:
@@ -110,7 +135,15 @@ def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str],
         specs = specs[:spec_limit]
         logging.info("Limiting specs to %s", spec_limit)
 
-    top_k = _int_env("FAST_TOP_K", 3 if fast_mode else 5)
+    top_k = _int_env("FAST_TOP_K", 3 if fast_mode else 2)
+    cpu = os.cpu_count() or 2
+    eval_workers = _bounded_workers(
+        "PIPELINE_EVAL_WORKERS",
+        min(8, cpu * 2) if fast_mode else min(6, max(4, cpu)),
+        16,
+    )
+    model_name = default_model()
+    reset_dispatch_stats()
 
     # locate vendor pdfs
     vendor_files = list(cfg_in.glob("*.pdf"))
@@ -165,7 +198,7 @@ def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str],
     processed_pairs = 0
 
     try:
-        # ── Phase 1: Parse all vendor PDFs ──────────────────────────────────
+        # â”€â”€ Phase 1: Parse all vendor PDFs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         parsed_blocks: dict[str, list[dict]] = {}
         for v_idx, v in enumerate(vendor_files):
             vendor_id = v.stem
@@ -217,22 +250,24 @@ def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str],
             _update_progress(
                 cur, conn, run_id,
                 parse_end_pct,
-                f"Parsed {v.name} — {len(db_blocks)} blocks",
+                f"Parsed {v.name} â€” {len(db_blocks)} blocks",
                 progress_cb,
             )
 
-        # ── Phase 2: Evaluate spec/vendor pairs ─────────────────────────────
+        # â”€â”€ Phase 2: Evaluate spec/vendor pairs â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        vendor_indexes = {
+            vendor_id: VendorIndex.build(blocks)
+            for vendor_id, blocks in parsed_blocks.items()
+        }
+        pending_tasks = []
         for v_idx, v in enumerate(vendor_files):
             vendor_id = v.stem
             db_blocks = parsed_blocks[vendor_id]
-            vendor_index = VendorIndex.build(db_blocks)
+            vendor_index = vendor_indexes[vendor_id]
 
             for s_idx, spec in enumerate(specs):
                 spec_id = spec.get("Spec_ID", "")
-
-                # compute precise progress within eval phase
                 pair_idx = v_idx * n_specs + s_idx
-                eval_pct = PARSE_WEIGHT + EVAL_WEIGHT * (pair_idx / total_pairs)
 
                 if (spec_id, vendor_id) in existing_pairs:
                     processed_pairs += 1
@@ -244,22 +279,40 @@ def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str],
                     )
                     continue
 
-                # emit progress BEFORE the (potentially slow) dispatch call
-                _update_progress(
-                    cur, conn, run_id,
-                    eval_pct,
-                    f"Evaluating pair {pair_idx + 1}/{total_pairs} — {vendor_id} × {spec_id}",
-                    progress_cb,
-                )
+                pending_tasks.append((pair_idx, spec, vendor_id, db_blocks, vendor_index))
 
-                result = dispatch_spec_vendor(
-                    spec,
-                    vendor_id,
-                    db_blocks,
-                    vendor_index=vendor_index,
-                    top_k=top_k,
-                    fast=fast_mode,
-                )
+        llm_concurrent = _int_env("LLM_MAX_CONCURRENT", 2)
+        _update_progress(
+            cur, conn, run_id,
+            PARSE_WEIGHT + EVAL_WEIGHT * (processed_pairs / total_pairs),
+            f"Evaluating {len(pending_tasks)} pairs — {eval_workers} workers, max {llm_concurrent} LLM calls",
+            progress_cb,
+        )
+        logging.info(
+            "Eval config: workers=%s top_k=%s model=%s llm_only_uncertain=%s",
+            eval_workers,
+            top_k,
+            model_name,
+            _bool_env("LLM_ONLY_UNCERTAIN"),
+        )
+
+        def _evaluate_task(task):
+            pair_idx, spec, vendor_id, db_blocks, vendor_index = task
+            result = dispatch_spec_vendor(
+                spec,
+                vendor_id,
+                db_blocks,
+                vendor_index=vendor_index,
+                model_name=model_name,
+                top_k=top_k,
+                fast=fast_mode,
+            )
+            return pair_idx, vendor_id, spec.get("Spec_ID", ""), result
+
+        with ThreadPoolExecutor(max_workers=eval_workers) as executor:
+            future_map = {executor.submit(_evaluate_task, task): task for task in pending_tasks}
+            for future in as_completed(future_map):
+                pair_idx, vendor_id, spec_id, result = future.result()
                 citation_bbox = result.get("citation_bbox")
                 if citation_bbox is not None:
                     citation_bbox = json.dumps(citation_bbox)
@@ -280,15 +333,27 @@ def main(run_id: str | None = None, progress_cb: Optional[Callable[[float, str],
                     ),
                 )
                 processed_pairs += 1
+                if processed_pairs == 1 or processed_pairs % 25 == 0:
+                    logging.info(
+                        "Progress %s/%s — last %s x %s -> %s",
+                        processed_pairs,
+                        total_pairs,
+                        vendor_id,
+                        spec_id,
+                        result["status"],
+                    )
                 _update_progress(
                     cur, conn, run_id,
                     PARSE_WEIGHT + EVAL_WEIGHT * (processed_pairs / total_pairs),
-                    f"Evaluated {processed_pairs}/{total_pairs} pairs — {vendor_id} × {spec_id} → {result['status']}",
+                    f"Evaluated {processed_pairs}/{total_pairs} pairs - {vendor_id} x {spec_id} -> {result['status']}",
                     progress_cb,
                 )
 
-        # ── Phase 3: Build report ────────────────────────────────────────────
-        _update_progress(cur, conn, run_id, 91.0, "Building Excel report…", progress_cb)
+        stats = get_dispatch_stats()
+        logging.info("Dispatch stats: %s", stats)
+
+        # â”€â”€ Phase 3: Build report â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        _update_progress(cur, conn, run_id, 91.0, "Building Excel reportâ€¦", progress_cb)
         cur.execute(
             "INSERT INTO audit_log (action, entity_type, entity_id, details) VALUES (?, ?, ?, ?)",
             ("pipeline_complete", "run", run_id, json.dumps({"output": str(cfg_out / "vendor_comparison_matrix.xlsx")})),

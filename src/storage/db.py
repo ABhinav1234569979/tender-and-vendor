@@ -22,6 +22,38 @@ def _ensure_indexes(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status ON pipeline_runs(status, updated_at)")
 
 
+_DEFAULT_RULES = [
+    # (rule_type, pattern, verdict, weight)
+    ("keyword", "complies",    "YES",      1.0),
+    ("keyword", "meets",       "YES",      1.0),
+    ("keyword", "guarantee",   "YES",      0.9),
+    ("keyword", "warrant",     "YES",      0.9),
+    ("keyword", "confirmed",   "YES",      0.8),
+    ("keyword", "provided",    "YES",      0.7),
+    ("keyword", "included",    "YES",      0.7),
+    ("keyword", "rated",       "NEARLY OK", 0.7),
+    ("keyword", "equivalent",  "NEARLY OK", 0.7),
+    ("keyword", "similar",     "NEARLY OK", 0.6),
+    ("keyword", "partial",     "NEARLY OK", 0.6),
+    ("keyword", "not comply",  "NO",       1.0),
+    ("keyword", "does not",    "NO",       0.8),
+    ("keyword", "unable",      "NO",       0.8),
+    ("keyword", "not provided","NO",       0.9),
+    ("keyword", "not included","NO",       0.9),
+]
+
+
+def _seed_heuristic_rules(conn: sqlite3.Connection) -> None:
+    count = conn.execute("SELECT COUNT(*) FROM heuristic_rules").fetchone()[0]
+    if count > 0:
+        return
+    conn.executemany(
+        "INSERT OR IGNORE INTO heuristic_rules (rule_type, pattern, verdict, weight, source) VALUES (?, ?, ?, ?, 'system')",
+        [(r[0], r[1], r[2], r[3]) for r in _DEFAULT_RULES],
+    )
+    conn.commit()
+
+
 def get_connection(db_path: str) -> sqlite3.Connection:
     """Return a hardened sqlite3 connection with safe PRAGMAs applied.
 
@@ -79,3 +111,5 @@ def init_db(db_path: str) -> None:
         _ensure_column(conn, "compliance_matrix", "citation_page", "citation_page INTEGER")
         _ensure_column(conn, "compliance_matrix", "citation_bbox", "citation_bbox TEXT")
         _ensure_indexes(conn)
+        # seed default heuristic rules if table is empty
+        _seed_heuristic_rules(conn)

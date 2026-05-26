@@ -117,6 +117,11 @@ export async function downloadVendorReport(vendorId) {
   return response.blob()
 }
 
+export async function getOllamaStatus() {
+  const response = await request('/ollama-status')
+  return response.json()
+}
+
 export async function getOutputFiles() {
   const response = await request('/output-files')
   return response.json()

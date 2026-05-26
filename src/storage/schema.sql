@@ -84,8 +84,27 @@ CREATE TABLE IF NOT EXISTS application_users (
     updated_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX IF NOT EXISTS idx_master_specs_source_spec ON master_specs(source_file, spec_id);
-CREATE INDEX IF NOT EXISTS idx_cm_spec_vendor ON compliance_matrix(spec_id, vendor_id);
-CREATE INDEX IF NOT EXISTS idx_cm_citation_doc ON compliance_matrix(citation_doc_id);
-CREATE INDEX IF NOT EXISTS idx_audit_created ON audit_log(created_at);
-CREATE INDEX IF NOT EXISTS idx_pipeline_runs_status ON pipeline_runs(status, updated_at);
+CREATE TABLE IF NOT EXISTS format_profiles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_name TEXT NOT NULL,
+    sheet_name TEXT NOT NULL,
+    profile_json TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(file_name, sheet_name)
+);
+
+CREATE TABLE IF NOT EXISTS heuristic_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_type TEXT NOT NULL,
+    pattern TEXT NOT NULL,
+    verdict TEXT NOT NULL,
+    weight REAL NOT NULL DEFAULT 1.0,
+    hit_count INTEGER NOT NULL DEFAULT 0,
+    source TEXT NOT NULL DEFAULT 'system',
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_format_profiles_file ON format_profiles(file_name);
+CREATE INDEX IF NOT EXISTS idx_heuristic_rules_type ON heuristic_rules(rule_type);
+

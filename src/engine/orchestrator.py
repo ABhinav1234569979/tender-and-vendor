@@ -3,13 +3,60 @@ from __future__ import annotations
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 import math
+import os
 import re
+import json
+import threading
 
 from src.engine.agents import run_fallback_agent, run_risk_agent, run_technical_agent
+from src.engine.ollama_client import default_model, ollama_generate, is_healthy
 import logging
-from src.engine.judge import run_consensus_judge
+from src.engine.judge import run_consensus_judge, _extract_json, _decision_rule
+from src.engine.prompts import FAST_EVAL_PROMPT
+
+_dispatch_stats_lock = threading.Lock()
+_dispatch_stats: Dict[str, int] = {
+    "quick": 0,
+    "heuristic": 0,
+    "fast": 0,
+    "llm_single": 0,
+    "llm_multi": 0,
+}
+
+
+def get_dispatch_stats() -> Dict[str, int]:
+    with _dispatch_stats_lock:
+        return dict(_dispatch_stats)
+
+
+def reset_dispatch_stats() -> None:
+    with _dispatch_stats_lock:
+        for key in _dispatch_stats:
+            _dispatch_stats[key] = 0
+
+
+def _record_dispatch(path: str) -> None:
+    with _dispatch_stats_lock:
+        _dispatch_stats[path] = _dispatch_stats.get(path, 0) + 1
+
+
+def _bool_env(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _float_env(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
 
 
 def _tokenize(text: str) -> List[str]:
@@ -109,14 +156,147 @@ def _top_blocks_from_index(spec_text: str, index: VendorIndex, limit: int = 5) -
     return [dict(index.blocks[idx]) for idx in top_indices], [index.block_texts_norm[idx] for idx in top_indices]
 
 
-def _trim_context(context: str, max_chars: int = 4000) -> str:
+def _trim_context(context: str, max_chars: int = 900) -> str:
+    """Trim context to max_chars, cutting at a sentence boundary.
+
+    Default is 1500 chars — enough for a 1.5B model to reason well
+    without blowing the context window or slowing generation.
+    """
     if len(context) <= max_chars:
         return context
     trimmed = context[:max_chars]
     sentence_end = max(trimmed.rfind("."), trimmed.rfind("!"), trimmed.rfind("?"))
-    if sentence_end >= max_chars * 0.6:
+    if sentence_end >= max_chars * 0.5:
         return trimmed[: sentence_end + 1]
     return trimmed.rstrip()
+
+
+def _quick_evidence_verdict(requirement: str, top_blocks: Sequence[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Return a high-confidence verdict for obvious evidence."""
+    if not requirement or not top_blocks:
+        return None
+
+    best = top_blocks[0]
+    text = str(best.get("text", ""))
+    lower_text = text.lower()
+    positive_markers = (
+        "complies",
+        "compliant",
+        "meets",
+        "yes",
+        "as per specification",
+        "as per tender",
+        "provided",
+        "included",
+        "available",
+        "supported",
+    )
+    if not any(marker in lower_text for marker in positive_markers):
+        return None
+
+    req_tokens = set(_tokenize(requirement))
+    evidence_tokens = set(_tokenize(text))
+    if not req_tokens:
+        return None
+
+    overlap = req_tokens & evidence_tokens
+    overlap_ratio = len(overlap) / max(1, len(req_tokens))
+    req_numbers = set(re.findall(r"\d+(?:\.\d+)?", requirement))
+    evidence_numbers = set(re.findall(r"\d+(?:\.\d+)?", text))
+    numbers_ok = not req_numbers or req_numbers <= evidence_numbers
+
+    if overlap_ratio >= 0.18 and numbers_ok:
+        return {
+            "status": "YES",
+            "citation": text,
+            "reasoning": f"Fast evidence match: {len(overlap)} requirement terms found in cited context.",
+            "confidence": float(min(0.98, 0.72 + overlap_ratio)),
+        }
+    return None
+
+
+def _heuristic_overlap_eval(
+    requirement: str,
+    top_blocks: Sequence[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """High-confidence token overlap — skips LLM when LLM_ONLY_UNCERTAIN is enabled."""
+    if not requirement or not top_blocks:
+        return None
+
+    best = top_blocks[0]
+    text = str(best.get("text", ""))
+    if not text.strip():
+        return None
+
+    spec_tokens = set(_tokenize(requirement))
+    block_tokens = set(_tokenize(text))
+    if not spec_tokens:
+        return None
+
+    overlap = spec_tokens & block_tokens
+    overlap_ratio = len(overlap) / max(1, len(spec_tokens))
+    req_numbers = set(re.findall(r"\d+(?:\.\d+)?", requirement))
+    evidence_numbers = set(re.findall(r"\d+(?:\.\d+)?", text))
+    numbers_ok = not req_numbers or req_numbers <= evidence_numbers
+
+    yes_threshold = _float_env("HEURISTIC_YES_RATIO", 0.25)
+    no_threshold = _float_env("HEURISTIC_NO_RATIO", 0.08)
+
+    if overlap_ratio >= yes_threshold and numbers_ok:
+        confidence = float(min(0.96, 0.68 + overlap_ratio))
+        return {
+            "status": "YES",
+            "citation": text,
+            "reasoning": f"Heuristic match: {len(overlap)}/{len(spec_tokens)} requirement terms in top evidence.",
+            "confidence": confidence,
+        }
+
+    if overlap_ratio <= no_threshold:
+        return {
+            "status": "NO",
+            "citation": text[:500],
+            "reasoning": f"Heuristic: weak evidence overlap ({len(overlap)}/{len(spec_tokens)} terms).",
+            "confidence": float(min(0.92, 0.75 + (no_threshold - overlap_ratio))),
+        }
+
+    return None
+
+
+def _using_default_agents() -> bool:
+    """Tests monkeypatch these callables; keep that path explicitly testable."""
+    return (
+        getattr(run_technical_agent, "__module__", "") == "src.engine.agents"
+        and getattr(run_risk_agent, "__module__", "") == "src.engine.agents"
+        and getattr(run_fallback_agent, "__module__", "") == "src.engine.agents"
+    )
+
+
+def _single_call_dispatch(
+    requirement: str,
+    context: str,
+    model_name: str,
+) -> Optional[Dict[str, Any]]:
+    """One Ollama call instead of 3 agents + 1 judge.
+
+    Used for small models (<=3B) where 4 sequential calls are too slow.
+    Falls back to None so the caller can use the heuristic path.
+    """
+    prompt = FAST_EVAL_PROMPT.format(requirement=requirement, context=context)
+    text = ollama_generate(model=model_name, prompt=prompt, temperature=0.0, max_tokens=200)
+    if not text:
+        return None
+    parsed = _extract_json(text)
+    if not parsed:
+        return None
+    status = str(parsed.get("status", "")).strip().upper()
+    if status not in {"YES", "NO", "NEARLY OK"}:
+        return None
+    return {
+        "status": status,
+        "citation": str(parsed.get("citation", "")),
+        "reasoning": str(parsed.get("reasoning", "")),
+        "confidence": float(parsed.get("confidence", 0.5) or 0.5),
+    }
 
 
 def dispatch_spec_vendor(
@@ -124,7 +304,7 @@ def dispatch_spec_vendor(
     vendor_id: str,
     blocks: List[Dict[str, Any]],
     vendor_index: Optional[VendorIndex] = None,
-    model_name: str = "qwen2.5-coder:1.5b",
+    model_name: str | None = None,
     top_k: int = 5,
     agents: List[str] | None = None,
     fast: bool = False,
@@ -134,32 +314,58 @@ def dispatch_spec_vendor(
         or spec.get("company_requirement")
         or ""
     )
-    logging.info(f"Dispatching spec {spec.get('Spec_ID','')} for vendor {vendor_id} using model {model_name}")
+    spec_id = spec.get("Spec_ID", "")
+    if not model_name:
+        model_name = default_model()
+    logging.debug("Dispatching %s for %s (model=%s)", spec_id, vendor_id, model_name)
+
     if agents is None:
         agents = ["technical", "risk", "fallback"]
     if vendor_index is None:
         logging.warning("VendorIndex not provided; building per spec (slow path)")
         vendor_index = VendorIndex.build(blocks)
+
     top_blocks, top_blocks_norm = _top_blocks_from_index(requirement, vendor_index, limit=top_k)
     context = "\n\n".join(block.get("text", "") for block in top_blocks)
-    context = _trim_context(context)
+    context = _trim_context(context)  # 1500 chars — fast for small models
+
+    # ── fast heuristic path (no Ollama) ─────────────────────────────────────
+    allow_model_shortcuts = _using_default_agents()
+
+    quick = _quick_evidence_verdict(requirement, top_blocks) if allow_model_shortcuts else None
+    if quick:
+        _record_dispatch("quick")
+        best_block = top_blocks[0] if top_blocks else {}
+        return {
+            "spec_id": spec_id,
+            "vendor_id": vendor_id,
+            "status": quick["status"],
+            "citation": quick["citation"],
+            "reasoning": quick["reasoning"],
+            "confidence": quick["confidence"],
+            "citation_page": best_block.get("page"),
+            "citation_bbox": best_block.get("bbox"),
+            "technical": {"status": quick["status"], "confidence": quick["confidence"]},
+            "risk": {},
+            "fallback": {},
+            "top_blocks": top_blocks,
+        }
 
     if fast:
-        # Quick heuristic: check token overlap between requirement and top block
+        _record_dispatch("fast")
         best = top_blocks[0] if top_blocks else {}
         spec_tokens = set(_tokenize(requirement))
         block_tokens = set(_tokenize(best.get("text", "")))
         overlap = spec_tokens & block_tokens
         score = (len(overlap) / max(1, len(spec_tokens))) if spec_tokens else 0.0
         status = "YES" if score >= 0.2 else "NO"
-        confidence = float(min(0.99, max(0.0, score)))
         return {
-            "spec_id": spec.get("Spec_ID", ""),
+            "spec_id": spec_id,
             "vendor_id": vendor_id,
             "status": status,
             "citation": best.get("text", ""),
             "reasoning": f"heuristic token overlap {len(overlap)} tokens",
-            "confidence": confidence,
+            "confidence": float(min(0.99, max(0.0, score))),
             "citation_page": best.get("page"),
             "citation_bbox": best.get("bbox"),
             "technical": {},
@@ -168,6 +374,52 @@ def dispatch_spec_vendor(
             "top_blocks": top_blocks,
         }
 
+    if allow_model_shortcuts and _bool_env("LLM_ONLY_UNCERTAIN", False):
+        heuristic = _heuristic_overlap_eval(requirement, top_blocks)
+        if heuristic:
+            _record_dispatch("heuristic")
+            best_block = top_blocks[0] if top_blocks else {}
+            citation = _verify_citation(heuristic.get("citation", ""), top_blocks_norm, best_block.get("text", ""))
+            return {
+                "spec_id": spec_id,
+                "vendor_id": vendor_id,
+                "status": heuristic["status"],
+                "citation": citation,
+                "reasoning": heuristic.get("reasoning", ""),
+                "confidence": heuristic.get("confidence", 0.5),
+                "citation_page": best_block.get("page"),
+                "citation_bbox": best_block.get("bbox"),
+                "technical": {"status": heuristic["status"], "confidence": heuristic.get("confidence", 0.5)},
+                "risk": {},
+                "fallback": {},
+                "top_blocks": top_blocks,
+            }
+
+    # ── single-call LLM path (1 call instead of 4) ──────────────────────────
+    if allow_model_shortcuts and is_healthy():
+        logging.info("LLM eval %s x %s (uncertain — ~30s possible)", spec_id, vendor_id)
+        judged = _single_call_dispatch(requirement, context, model_name)
+        if judged:
+            _record_dispatch("llm_single")
+            best_block = top_blocks[0] if top_blocks else {}
+            citation = _verify_citation(judged.get("citation", ""), top_blocks_norm, best_block.get("text", ""))
+            return {
+                "spec_id": spec_id,
+                "vendor_id": vendor_id,
+                "status": judged["status"],
+                "citation": citation,
+                "reasoning": judged.get("reasoning", ""),
+                "confidence": judged.get("confidence", 0.5),
+                "citation_page": best_block.get("page"),
+                "citation_bbox": best_block.get("bbox"),
+                "technical": {"status": judged["status"], "confidence": judged.get("confidence", 0.5)},
+                "risk": {},
+                "fallback": {},
+                "top_blocks": top_blocks,
+            }
+
+    # ── multi-agent path (fallback when single-call fails or LLM is down) ───
+    _record_dispatch("llm_multi")
     futures = {}
     results = {"technical": {}, "risk": {}, "fallback": {}}
     max_workers = max(1, len(agents))
@@ -178,14 +430,12 @@ def dispatch_spec_vendor(
             futures["risk"] = executor.submit(run_risk_agent, context, requirement, model_name)
         if "fallback" in agents:
             futures["fallback"] = executor.submit(run_fallback_agent, context, requirement, model_name)
-
         for name, fut in futures.items():
             try:
                 results[name] = fut.result()
             except Exception:
                 results[name] = {}
 
-    # ensure we pass three arguments to judge; missing agents are passed as empty dicts
     judged = run_consensus_judge(
         results.get("technical", {}),
         results.get("risk", {}),
@@ -195,7 +445,7 @@ def dispatch_spec_vendor(
     best_block = top_blocks[0] if top_blocks else {}
     citation = _verify_citation(judged.get("citation", ""), top_blocks_norm, best_block.get("text", ""))
     return {
-        "spec_id": spec.get("Spec_ID", ""),
+        "spec_id": spec_id,
         "vendor_id": vendor_id,
         "status": judged.get("status", "NO"),
         "citation": citation,
