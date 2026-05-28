@@ -728,6 +728,15 @@ def format_profiles_endpoint(_: None = Depends(require_localhost)) -> dict:
     return FileResponse(str(report_path), filename=report_path.name)
 
 
+@app.get("/report")
+def report_endpoint(_: None = Depends(require_localhost)):
+    """Download the main vendor comparison matrix."""
+    report_path = _report_path()
+    if not report_path.exists():
+        raise HTTPException(status_code=404, detail="Report not found. Run the pipeline first.")
+    return FileResponse(str(report_path), filename=report_path.name)
+
+
 @app.get("/output-files")
 def output_files_endpoint(_: None = Depends(require_localhost)) -> dict:
     """List all generated output files available for download."""
