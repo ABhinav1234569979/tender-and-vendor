@@ -69,8 +69,57 @@ function ProgressBar({ value, status }) {
   )
 }
 
+/* ─── nav icon components ────────────────────────────────────────────────── */
+function IconDashboard() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="3" width="7" height="7" rx="1"/>
+      <rect x="14" y="3" width="7" height="7" rx="1"/>
+      <rect x="3" y="14" width="7" height="7" rx="1"/>
+      <rect x="14" y="14" width="7" height="7" rx="1"/>
+    </svg>
+  )
+}
+
+function IconDocuments() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+      <polyline points="14 2 14 8 20 8"/>
+      <line x1="16" y1="13" x2="8" y2="13"/>
+      <line x1="16" y1="17" x2="8" y2="17"/>
+      <polyline points="10 9 9 9 8 9"/>
+    </svg>
+  )
+}
+
+function IconComparison() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="18" y1="20" x2="18" y2="10"/>
+      <line x1="12" y1="20" x2="12" y2="4"/>
+      <line x1="6" y1="20" x2="6" y2="14"/>
+    </svg>
+  )
+}
+
+function IconSettings() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="3"/>
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+    </svg>
+  )
+}
+
 /* ─── main component ────────────────────────────────────────────────────── */
 export default function App() {
+  /* ── navigation state ── */
+  const [activePage, setActivePage] = useState('dashboard')
+  const [darkMode, setDarkMode] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+
+  /* ── all existing state (untouched) ── */
   const [masterFile, setMasterFile] = useState(null)
   const [vendorFiles, setVendorFiles] = useState([])
   const [files, setFiles] = useState([])
@@ -101,6 +150,11 @@ export default function App() {
   const elapsedTimerRef = useRef(null)
   const selectedCount = useMemo(() => vendorFiles.filter(Boolean).length, [vendorFiles])
   const isActive = ['queued', 'running'].includes(runStatus)
+
+  /* apply dark mode class to root */
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark-mode', darkMode)
+  }, [darkMode])
 
   const sidebarDocs = useMemo(() => {
     const selectedTender = masterFile ? [{
@@ -182,7 +236,7 @@ export default function App() {
     }
   }, [activeDoc, sidebarDocs])
 
-  /* elapsed wall-clock timer — runs whenever pipeline is active */
+  /* elapsed wall-clock timer */
   useEffect(() => {
     if (isActive) {
       if (!startTimeRef.current) startTimeRef.current = Date.now()
@@ -190,12 +244,11 @@ export default function App() {
         () => setElapsed(Date.now() - startTimeRef.current), 500)
     } else {
       window.clearInterval(elapsedTimerRef.current)
-      // keep final elapsed visible after completion/failure
     }
     return () => window.clearInterval(elapsedTimerRef.current)
   }, [isActive])
 
-  /* poll pipeline status every 1.5 s whenever we have a runId */
+  /* poll pipeline status */
   useEffect(() => {
     if (!runId) return undefined
     const poll = window.setInterval(async () => {
@@ -420,7 +473,6 @@ export default function App() {
     setChatInput('')
   }
 
-  /* derive human phase label from raw backend message */
   function phaseLabel() {
     const m = (runMessage || '').toLowerCase()
     if (!m) return ''
@@ -457,339 +509,742 @@ export default function App() {
     )
   }
 
-  /* ── render ── */
-  return (
-    <div className="app-shell">
-      <div className="app-frame">
-        <aside className="document-sidebar" aria-label="Document workspace">
-          <div className="sidebar-header">
-            <p className="eyebrow">Workspace</p>
-            <h2>Document Dock</h2>
-            <p>Quick access to tender, vendor, and merged output files.</p>
-          </div>
+  /* ── nav items ── */
+  const navItems = [
+    { id: 'dashboard',   label: 'Dashboard',         icon: <IconDashboard /> },
+    { id: 'documents',   label: 'Documents',          icon: <IconDocuments /> },
+    { id: 'comparison',  label: 'Vendor Comparison',  icon: <IconComparison /> },
+    { id: 'settings',    label: 'Settings',           icon: <IconSettings /> },
+  ]
 
-          <div className="sidebar-stats">
-            <div><span>Selected</span><strong>{selectedCount + (masterFile ? 1 : 0)}</strong></div>
-            <div><span>Uploaded</span><strong>{files.length}</strong></div>
-            <div><span>Reports</span><strong>{outputFiles.length}</strong></div>
-          </div>
+  /* ─── page renderers ─────────────────────────────────────────────────── */
 
-          <div className="doc-groups">
-            {Object.entries(groupedDocs).map(([title, docs]) => renderDocumentGroup(title, docs))}
+  function renderDashboard() {
+    return (
+      <div className="workspace">
+        {/* topbar */}
+        <header className="topbar">
+          <div>
+            <p className="eyebrow">Tender &amp; Vendor Compliance</p>
+            <h1>Compliance Pipeline Console</h1>
+            <p className="topbar-subtitle">Local-first review dashboard for synthetic tender/vendor testing.</p>
           </div>
-
-          <div className="active-doc-panel">
-            <span className="panel-kicker">Selected</span>
-            {activeDoc ? (
-              <>
-                <strong>{activeDoc.name}</strong>
-                <p>{activeDoc.label} · {activeDoc.meta}</p>
-                <button className="sidebar-action" type="button" onClick={() => handleDocumentAction(activeDoc)} disabled={busy}>
-                  {activeDoc.action === 'stored-only' ? 'Backend stored' : activeDoc.action === 'open-pdf' ? 'Open PDF' : activeDoc.action === 'download-report' ? 'Download' : 'Open'}
-                </button>
-              </>
-            ) : (
-              <p>No active document selected.</p>
+          <div className="topbar-right">
+            {ollamaStatus && (
+              <div className={`ollama-chip ${ollamaStatus.healthy ? 'ollama-ok' : 'ollama-down'}`}
+                title={ollamaStatus.healthy ? `Models: ${ollamaStatus.models.join(', ')}` : 'LLM server not reachable — using heuristic fallback'}>
+                <span className="ollama-dot" />
+                {ollamaStatus.healthy
+                  ? `LLM · ${ollamaStatus.selected_model || ollamaStatus.models[0] || 'ready'}`
+                  : 'LLM offline'}
+              </div>
             )}
+            <div className="api-chip">{API_BASE}</div>
           </div>
+        </header>
 
-          <div className="doc-chat">
-            <div className="doc-chat__head">
-              <div>
-                <span className="panel-kicker">Ask</span>
-                <strong>Document Chat</strong>
-              </div>
-              <span className={`chat-status ${ollamaStatus?.healthy ? 'chat-status--ok' : 'chat-status--offline'}`}>
-                {ollamaStatus?.healthy ? 'LLM ready' : 'LLM offline'}
-              </span>
-            </div>
-            <div className="chat-messages">
-              {chatMessages.map((msg) => (
-                <div className={`chat-bubble chat-bubble--${msg.role}`} key={msg.id}>
-                  {msg.text.split('\n').map((line, index) => (
-                    <p key={`${msg.id}-${index}`}>{line}</p>
-                  ))}
-                </div>
-              ))}
-            </div>
-            <form className="chat-form" onSubmit={handleChatSend}>
-              <input
-                type="text"
-                value={chatInput}
-                onChange={(e) => setChatInput(e.target.value)}
-                placeholder="Ask about files, summary, LLM status..."
-              />
-              <button type="submit" disabled={!chatInput.trim()}>Send</button>
-            </form>
-          </div>
-        </aside>
-
-        <main className="workspace">
-
-          {/* topbar */}
-          <header className="topbar">
-            <div>
-              <p className="eyebrow">Tender &amp; Vendor Compliance</p>
-              <h1>Compliance Pipeline Console</h1>
-              <p className="topbar-subtitle">Local-first review dashboard for synthetic tender/vendor testing.</p>
-            </div>
-            <div className="topbar-right">
-              {ollamaStatus && (
-                <div className={`ollama-chip ${ollamaStatus.healthy ? 'ollama-ok' : 'ollama-down'}`}
-                  title={ollamaStatus.healthy ? `Models: ${ollamaStatus.models.join(', ')}` : 'LLM server not reachable — using heuristic fallback'}>
-                  <span className="ollama-dot" />
-                  {ollamaStatus.healthy
-                    ? `LLM · ${ollamaStatus.selected_model || ollamaStatus.models[0] || 'ready'}`
-                    : 'LLM offline'}
-                </div>
-              )}
-              <div className="api-chip">{API_BASE}</div>
-            </div>
-          </header>
-
-          {/* ── pipeline progress card ── */}
-          <section className="pipeline-card" aria-label="Pipeline status">
-            <div className="pipeline-card__header">
-              <div className="pipeline-card__title">
-                <span className="pipeline-card__label">Pipeline</span>
-                <StatusBadge status={runStatus} />
-              </div>
-              <div className="pipeline-card__meta">
-                {elapsed > 0 && (
-                  <span className="pipeline-card__elapsed">⏱ {fmtElapsed(elapsed)}</span>
-                )}
-                <button className="plain-button compact-button" type="button"
-                  onClick={refreshDashboard} disabled={busy}>Refresh</button>
-              </div>
+        {/* document dock sidebar (original left sidebar preserved inside dashboard) */}
+        <div className="dashboard-inner">
+          <aside className="document-sidebar" aria-label="Document workspace">
+            <div className="sidebar-header">
+              <p className="eyebrow">Workspace</p>
+              <h2>Document Dock</h2>
+              <p>Quick access to tender, vendor, and merged output files.</p>
             </div>
 
-            <ProgressBar value={runProgress} status={runStatus} />
-
-            {phaseLabel() && (
-              <p className="pipeline-card__phase">{phaseLabel()}</p>
-            )}
-
-            {/* step indicators */}
-            <div className="pipeline-steps">
-              {[
-                { key: 'upload',   label: 'Upload',   done: files.length > 0 },
-                { key: 'parse',    label: 'Parse',    done: runProgress > 5 },
-                { key: 'evaluate', label: 'Evaluate', done: runProgress > 50 },
-                { key: 'report',   label: 'Report',   done: runStatus === 'completed' },
-              ].map((step, i) => (
-                <div key={step.key}
-                  className={`pipeline-step ${step.done ? 'step-done' : isActive ? 'step-active' : 'step-pending'}`}>
-                  <div className="step-dot">{step.done ? '✓' : i + 1}</div>
-                  <span className="step-label">{step.label}</span>
-                </div>
-              ))}
+            <div className="sidebar-stats">
+              <div><span>Selected</span><strong>{selectedCount + (masterFile ? 1 : 0)}</strong></div>
+              <div><span>Uploaded</span><strong>{files.length}</strong></div>
+              <div><span>Reports</span><strong>{outputFiles.length}</strong></div>
             </div>
 
-            {runId && (
-              <p className="pipeline-card__runid">Run ID: <code>{runId}</code></p>
-            )}
-          </section>
-
-          {/* ── upload + incoming ── */}
-          <section className="grid-two">
-            <div className="panel upload-panel">
-              <div className="panel-title-row">
-                <div>
-                  <span className="panel-kicker">Input</span>
-                  <h2>Upload Documents</h2>
-                </div>
-              </div>
-              <label className="field-label" htmlFor="master-file">Master workbook (.xlsx)</label>
-              <input id="master-file" className="file-input" type="file" accept=".xlsx"
-                onChange={(e) => handleMasterChange(e.target.files?.[0] || null)} />
-              <div className="file-name">
-                {masterFile ? masterFile.name : 'No master workbook selected'}
-              </div>
-
-              <div className="row-between compact-row">
-                <label className="field-label">Vendor PDFs</label>
-                <button className="plain-button compact-button" type="button" onClick={addVendorRow}>+ Add File</button>
-              </div>
-
-              <div className="vendor-list">
-                {vendorFiles.length ? vendorFiles.map((file, index) => (
-                  <div className="vendor-row" key={`vendor-${index}`}>
-                    <input className="file-input" type="file" accept=".pdf"
-                      onChange={(e) => updateVendorFile(index, e.target.files?.[0] || null)} />
-                    <div className="file-name">
-                      {file ? file.name : `Vendor ${index + 1}: no file selected`}
-                    </div>
-                    <button className="plain-button danger compact-button" type="button"
-                      onClick={() => removeVendorRow(index)}>Remove</button>
-                  </div>
-                )) : <div className="empty-line">No vendor files added yet.</div>}
-              </div>
-
-              <div className="actions action-bar">
-                <button className="solid-button" type="button"
-                  onClick={handleUpload} disabled={busy}>Upload Files</button>
-                <button className="solid-button inverse" type="button"
-                  onClick={handleRunPipeline} disabled={busy || isActive}>Run Pipeline</button>
-                <button className="plain-button danger" type="button"
-                  onClick={handleResetPipeline} disabled={busy}
-                  title="Clear any stuck pipeline run">Reset Pipeline</button>
-              </div>
+            <div className="doc-groups">
+              {Object.entries(groupedDocs).map(([title, docs]) => renderDocumentGroup(title, docs))}
             </div>
 
-            <div className="panel">
-              <div className="panel-title-row">
-                <div>
-                  <span className="panel-kicker">Storage</span>
-                  <h2>Incoming Files</h2>
-                </div>
-                <span className="count-pill">{files.length}</span>
-              </div>
-              <div className="file-table">
-                {files.length ? files.map((file) => (
-                  <button
-                    type="button"
-                    className="file-row file-row--button"
-                    key={file.file_name}
-                    onClick={() => {
-                      const doc = sidebarDocs.find((d) => d.id === `incoming-${file.file_name}`)
-                      if (doc) setActiveDoc(doc)
-                    }}
-                  >
-                    <strong>{file.file_name}</strong>
-                    <span>{file.role}</span>
-                    <span>{fmtSize(file.size_bytes)}</span>
+            <div className="active-doc-panel">
+              <span className="panel-kicker">Selected</span>
+              {activeDoc ? (
+                <>
+                  <strong>{activeDoc.name}</strong>
+                  <p>{activeDoc.label} · {activeDoc.meta}</p>
+                  <button className="sidebar-action" type="button" onClick={() => handleDocumentAction(activeDoc)} disabled={busy}>
+                    {activeDoc.action === 'stored-only' ? 'Backend stored' : activeDoc.action === 'open-pdf' ? 'Open PDF' : activeDoc.action === 'download-report' ? 'Download' : 'Open'}
                   </button>
-                )) : <div className="empty-line">No incoming files loaded.</div>}
-              </div>
-            </div>
-          </section>
-
-          {/* ── summary + results ── */}
-          <section className="grid-two">
-            <div className="panel">
-              <div className="panel-title-row">
-                <div>
-                  <span className="panel-kicker">Matrix</span>
-                  <h2>Summary</h2>
-                </div>
-              </div>
-              {summary ? (
-                <div className="summary-grid">
-                  <div><span className="muted">Total</span><strong>{summary.total_results}</strong></div>
-                  {Object.entries(summary.status_counts || {}).map(([s, c]) => (
-                    <div key={s}><span className="muted">{s}</span><strong>{c}</strong></div>
-                  ))}
-                </div>
-              ) : <div className="empty-line">No summary loaded.</div>}
+                </>
+              ) : (
+                <p>No active document selected.</p>
+              )}
             </div>
 
-            <div className="panel">
-              <div className="panel-title-row">
+            <div className="doc-chat">
+              <div className="doc-chat__head">
                 <div>
-                  <span className="panel-kicker">Review</span>
-                  <h2>Latest Results</h2>
+                  <span className="panel-kicker">Ask</span>
+                  <strong>Document Chat</strong>
                 </div>
-                <span className="count-pill">{results.length}</span>
+                <span className={`chat-status ${ollamaStatus?.healthy ? 'chat-status--ok' : 'chat-status--offline'}`}>
+                  {ollamaStatus?.healthy ? 'LLM ready' : 'LLM offline'}
+                </span>
               </div>
-              <div className="result-list">
-                {results.length ? results.map((row) => (
-                  <div className="result-row" key={`${row.spec_id}-${row.vendor_id}`}>
-                    <strong>{row.spec_id}</strong>
-                    <span>{row.vendor_id}</span>
-                    <span className={`verdict verdict-${normalizeVerdict(row.status)}`}>
-                      {row.status}
-                    </span>
-                  </div>
-                )) : <div className="empty-line">No result rows loaded.</div>}
-              </div>
-            </div>
-          </section>
-
-          {/* ── run history ── */}
-          {runHistory.length > 0 && (
-            <section className="panel section-block">
-              <div className="panel-title-row">
-                <div>
-                  <span className="panel-kicker">Audit</span>
-                  <h2>Run History</h2>
-                </div>
-              </div>
-              <div className="run-history">
-                <div className="run-history__head">
-                  <span>Run ID</span><span>Status</span>
-                  <span>Progress</span><span>Message</span><span>Updated</span>
-                </div>
-                {runHistory.map((r) => (
-                  <div className="run-history__row" key={r.run_id}>
-                    <code className="run-id-short" title={r.run_id}>{r.run_id.slice(0, 8)}…</code>
-                    <StatusBadge status={r.status} />
-                    <div className="run-mini-bar">
-                      <div className="run-mini-fill"
-                        style={{ width: `${Math.min(100, r.progress || 0)}%` }} />
-                      <span>{(r.progress || 0).toFixed(0)}%</span>
-                    </div>
-                    <span className="run-msg" title={r.message}>
-                      {(r.message || '').slice(0, 42)}{(r.message || '').length > 42 ? '…' : ''}
-                    </span>
-                    <span className="run-time">
-                      {fmtDate(r.updated_at)}
-                    </span>
+              <div className="chat-messages">
+                {chatMessages.map((msg) => (
+                  <div className={`chat-bubble chat-bubble--${msg.role}`} key={msg.id}>
+                    {msg.text.split('\n').map((line, index) => (
+                      <p key={`${msg.id}-${index}`}>{line}</p>
+                    ))}
                   </div>
                 ))}
               </div>
-            </section>
-          )}
+              <form className="chat-form" onSubmit={handleChatSend}>
+                <input
+                  type="text"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  placeholder="Ask about files, summary, LLM status..."
+                />
+                <button type="submit" disabled={!chatInput.trim()}>Send</button>
+              </form>
+            </div>
+          </aside>
 
-          {/* ── downloads ── */}
+          <main className="workspace-main">
+            {/* pipeline progress card */}
+            <section className="pipeline-card" aria-label="Pipeline status">
+              <div className="pipeline-card__header">
+                <div className="pipeline-card__title">
+                  <span className="pipeline-card__label">Pipeline</span>
+                  <StatusBadge status={runStatus} />
+                </div>
+                <div className="pipeline-card__meta">
+                  {elapsed > 0 && (
+                    <span className="pipeline-card__elapsed">⏱ {fmtElapsed(elapsed)}</span>
+                  )}
+                  <button className="plain-button compact-button" type="button"
+                    onClick={refreshDashboard} disabled={busy}>Refresh</button>
+                </div>
+              </div>
+
+              <ProgressBar value={runProgress} status={runStatus} />
+
+              {phaseLabel() && (
+                <p className="pipeline-card__phase">{phaseLabel()}</p>
+              )}
+
+              <div className="pipeline-steps">
+                {[
+                  { key: 'upload',   label: 'Upload',   done: files.length > 0 },
+                  { key: 'parse',    label: 'Parse',    done: runProgress > 5 },
+                  { key: 'evaluate', label: 'Evaluate', done: runProgress > 50 },
+                  { key: 'report',   label: 'Report',   done: runStatus === 'completed' },
+                ].map((step, i) => (
+                  <div key={step.key}
+                    className={`pipeline-step ${step.done ? 'step-done' : isActive ? 'step-active' : 'step-pending'}`}>
+                    <div className="step-dot">{step.done ? '✓' : i + 1}</div>
+                    <span className="step-label">{step.label}</span>
+                  </div>
+                ))}
+              </div>
+
+              {runId && (
+                <p className="pipeline-card__runid">Run ID: <code>{runId}</code></p>
+              )}
+            </section>
+
+            {/* upload + incoming */}
+            <section className="grid-two">
+              <div className="panel upload-panel">
+                <div className="panel-title-row">
+                  <div>
+                    <span className="panel-kicker">Input</span>
+                    <h2>Upload Documents</h2>
+                  </div>
+                </div>
+                <label className="field-label" htmlFor="master-file">Master workbook (.xlsx)</label>
+                <input id="master-file" className="file-input" type="file" accept=".xlsx"
+                  onChange={(e) => handleMasterChange(e.target.files?.[0] || null)} />
+                <div className="file-name">
+                  {masterFile ? masterFile.name : 'No master workbook selected'}
+                </div>
+
+                <div className="row-between compact-row">
+                  <label className="field-label">Vendor PDFs</label>
+                  <button className="plain-button compact-button" type="button" onClick={addVendorRow}>+ Add File</button>
+                </div>
+
+                <div className="vendor-list">
+                  {vendorFiles.length ? vendorFiles.map((file, index) => (
+                    <div className="vendor-row" key={`vendor-${index}`}>
+                      <input className="file-input" type="file" accept=".pdf"
+                        onChange={(e) => updateVendorFile(index, e.target.files?.[0] || null)} />
+                      <div className="file-name">
+                        {file ? file.name : `Vendor ${index + 1}: no file selected`}
+                      </div>
+                      <button className="plain-button danger compact-button" type="button"
+                        onClick={() => removeVendorRow(index)}>Remove</button>
+                    </div>
+                  )) : <div className="empty-line">No vendor files added yet.</div>}
+                </div>
+
+                <div className="actions action-bar">
+                  <button className="solid-button" type="button"
+                    onClick={handleUpload} disabled={busy}>Upload Files</button>
+                  <button className="solid-button inverse" type="button"
+                    onClick={handleRunPipeline} disabled={busy || isActive}>Run Pipeline</button>
+                  <button className="plain-button danger" type="button"
+                    onClick={handleResetPipeline} disabled={busy}
+                    title="Clear any stuck pipeline run">Reset Pipeline</button>
+                </div>
+              </div>
+
+              <div className="panel">
+                <div className="panel-title-row">
+                  <div>
+                    <span className="panel-kicker">Storage</span>
+                    <h2>Incoming Files</h2>
+                  </div>
+                  <span className="count-pill">{files.length}</span>
+                </div>
+                <div className="file-table">
+                  {files.length ? files.map((file) => (
+                    <button
+                      type="button"
+                      className="file-row file-row--button"
+                      key={file.file_name}
+                      onClick={() => {
+                        const doc = sidebarDocs.find((d) => d.id === `incoming-${file.file_name}`)
+                        if (doc) setActiveDoc(doc)
+                      }}
+                    >
+                      <strong>{file.file_name}</strong>
+                      <span>{file.role}</span>
+                      <span>{fmtSize(file.size_bytes)}</span>
+                    </button>
+                  )) : <div className="empty-line">No incoming files loaded.</div>}
+                </div>
+              </div>
+            </section>
+
+            {/* summary + results */}
+            <section className="grid-two">
+              <div className="panel">
+                <div className="panel-title-row">
+                  <div>
+                    <span className="panel-kicker">Matrix</span>
+                    <h2>Summary</h2>
+                  </div>
+                </div>
+                {summary ? (
+                  <div className="summary-grid">
+                    <div><span className="muted">Total</span><strong>{summary.total_results}</strong></div>
+                    {Object.entries(summary.status_counts || {}).map(([s, c]) => (
+                      <div key={s}><span className="muted">{s}</span><strong>{c}</strong></div>
+                    ))}
+                  </div>
+                ) : <div className="empty-line">No summary loaded.</div>}
+              </div>
+
+              <div className="panel">
+                <div className="panel-title-row">
+                  <div>
+                    <span className="panel-kicker">Review</span>
+                    <h2>Latest Results</h2>
+                  </div>
+                  <span className="count-pill">{results.length}</span>
+                </div>
+                <div className="result-list">
+                  {results.length ? results.map((row) => (
+                    <div className="result-row" key={`${row.spec_id}-${row.vendor_id}`}>
+                      <strong>{row.spec_id}</strong>
+                      <span>{row.vendor_id}</span>
+                      <span className={`verdict verdict-${normalizeVerdict(row.status)}`}>
+                        {row.status}
+                      </span>
+                    </div>
+                  )) : <div className="empty-line">No result rows loaded.</div>}
+                </div>
+              </div>
+            </section>
+
+            {/* run history */}
+            {runHistory.length > 0 && (
+              <section className="panel section-block">
+                <div className="panel-title-row">
+                  <div>
+                    <span className="panel-kicker">Audit</span>
+                    <h2>Run History</h2>
+                  </div>
+                </div>
+                <div className="run-history">
+                  <div className="run-history__head">
+                    <span>Run ID</span><span>Status</span>
+                    <span>Progress</span><span>Message</span><span>Updated</span>
+                  </div>
+                  {runHistory.map((r) => (
+                    <div className="run-history__row" key={r.run_id}>
+                      <code className="run-id-short" title={r.run_id}>{r.run_id.slice(0, 8)}…</code>
+                      <StatusBadge status={r.status} />
+                      <div className="run-mini-bar">
+                        <div className="run-mini-fill"
+                          style={{ width: `${Math.min(100, r.progress || 0)}%` }} />
+                        <span>{(r.progress || 0).toFixed(0)}%</span>
+                      </div>
+                      <span className="run-msg" title={r.message}>
+                        {(r.message || '').slice(0, 42)}{(r.message || '').length > 42 ? '…' : ''}
+                      </span>
+                      <span className="run-time">
+                        {fmtDate(r.updated_at)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+
+            {/* downloads */}
+            <section className="panel section-block">
+              <div className="row-between">
+                <div>
+                  <span className="panel-kicker">Export</span>
+                  <h2>Downloads</h2>
+                </div>
+                <button className="solid-button compact-button" type="button"
+                  onClick={handleDownloadAll} disabled={busy || !outputFiles.length}>
+                  ⬇ Download All (ZIP)
+                </button>
+              </div>
+              {outputFiles.length ? (
+                <div className="file-table">
+                  {outputFiles.map((f) => {
+                    const isVendor = f.file_name.startsWith('vendor_') &&
+                      f.file_name !== 'vendor_comparison_matrix.xlsx'
+                    const vendorId = isVendor
+                      ? f.file_name.replace(/^vendor_/, '').replace(/\.xlsx$/, '') : null
+                    return (
+                      <div className="file-row" key={f.file_name}>
+                        <strong>{f.file_name}</strong>
+                        <span>{fmtSize(f.size_bytes)}</span>
+                        <span className="muted inline-muted">{fmtDate(f.modified_at)}</span>
+                        <div className="row-actions">
+                          <button className="plain-button compact-button" type="button" disabled={busy}
+                            onClick={() => isVendor
+                              ? handleDownloadVendor(vendorId)
+                              : handleDownloadReport()}>
+                            ⬇ Download
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="empty-line">No output files yet. Run the pipeline first.</div>
+              )}
+            </section>
+
+            {/* messages */}
+            {(message || error) && (
+              <section className="section-block status-block">
+                {message && <div className="message success">{message}</div>}
+                {error   && <div className="message error">{error}</div>}
+              </section>
+            )}
+          </main>
+        </div>
+      </div>
+    )
+  }
+
+  function renderDocumentsPage() {
+    const tenderDocs = sidebarDocs.filter(d => d.group === 'Tender document')
+    const vendorDocs = sidebarDocs.filter(d => d.group === 'Vendor documents')
+    const reportDocs = sidebarDocs.filter(d => d.group === 'Merged / reports')
+
+    return (
+      <div className="page-content">
+        <div className="page-header">
+          <p className="eyebrow">File Management</p>
+          <h1>Documents</h1>
+          <p className="page-subtitle">Tender files, vendor files, and generated reports from current session.</p>
+        </div>
+
+        <div className="docs-page-grid">
+          <div className="panel">
+            <div className="panel-title-row">
+              <div>
+                <span className="panel-kicker">Tender</span>
+                <h2>Tender Files</h2>
+              </div>
+              <span className="count-pill">{tenderDocs.length}</span>
+            </div>
+            <div className="doc-groups">
+              {tenderDocs.length ? tenderDocs.map(doc => (
+                <div className="doc-card-full" key={doc.id}>
+                  <div className="doc-card-full__info">
+                    <span className="doc-card__label">{doc.label}</span>
+                    <strong>{doc.name}</strong>
+                    <span className="doc-meta">{doc.meta}</span>
+                  </div>
+                  <button
+                    className="plain-button compact-button"
+                    type="button"
+                    onClick={() => handleDocumentAction(doc)}
+                    disabled={busy || doc.action === 'stored-only'}
+                  >
+                    {doc.action === 'stored-only' ? 'Stored' : 'Open'}
+                  </button>
+                </div>
+              )) : (
+                <div className="placeholder-card">
+                  <div className="placeholder-icon">📄</div>
+                  <p>No tender workbook uploaded yet.</p>
+                  <span>Go to Dashboard to upload a master workbook (.xlsx)</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="panel-title-row">
+              <div>
+                <span className="panel-kicker">Vendors</span>
+                <h2>Vendor Files</h2>
+              </div>
+              <span className="count-pill">{vendorDocs.length}</span>
+            </div>
+            {vendorDocs.length ? vendorDocs.map(doc => (
+              <div className="doc-card-full" key={doc.id}>
+                <div className="doc-card-full__info">
+                  <span className="doc-card__label">{doc.label}</span>
+                  <strong>{doc.name}</strong>
+                  <span className="doc-meta">{doc.meta}</span>
+                </div>
+                <button
+                  className="plain-button compact-button"
+                  type="button"
+                  onClick={() => handleDocumentAction(doc)}
+                  disabled={busy}
+                >
+                  {doc.action === 'open-pdf' ? 'Open PDF' : 'Open'}
+                </button>
+              </div>
+            )) : (
+              <div className="placeholder-card">
+                <div className="placeholder-icon">📋</div>
+                <p>No vendor PDFs uploaded yet.</p>
+                <span>Go to Dashboard to upload vendor PDF files</span>
+              </div>
+            )}
+          </div>
+
+          <div className="panel docs-page-grid--full">
+            <div className="panel-title-row">
+              <div>
+                <span className="panel-kicker">Output</span>
+                <h2>Generated Reports</h2>
+              </div>
+              <span className="count-pill">{reportDocs.length}</span>
+            </div>
+            {reportDocs.length ? (
+              <div className="file-table">
+                {reportDocs.map(doc => (
+                  <div className="file-row" key={doc.id}>
+                    <strong>{doc.name}</strong>
+                    <span className="muted inline-muted">{doc.meta}</span>
+                    <div className="row-actions">
+                      <button
+                        className="plain-button compact-button"
+                        type="button"
+                        onClick={() => handleDocumentAction(doc)}
+                        disabled={busy}
+                      >
+                        ⬇ Download
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="placeholder-card placeholder-card--wide">
+                <div className="placeholder-icon">📊</div>
+                <p>No reports generated yet.</p>
+                <span>Run the pipeline from Dashboard to generate comparison reports</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  function renderComparisonPage() {
+    const hasResults = results.length > 0
+    const hasSummary = summary && summary.total_results > 0
+
+    return (
+      <div className="page-content">
+        <div className="page-header">
+          <p className="eyebrow">Analytics</p>
+          <h1>Vendor Comparison</h1>
+          <p className="page-subtitle">Vendor rankings and compliance comparison matrix from latest pipeline run.</p>
+        </div>
+
+        {hasSummary && (
+          <section className="panel section-block">
+            <div className="panel-title-row">
+              <div>
+                <span className="panel-kicker">Overview</span>
+                <h2>Compliance Summary</h2>
+              </div>
+              <StatusBadge status={runStatus} />
+            </div>
+            <div className="summary-grid">
+              <div><span className="muted">Total</span><strong>{summary.total_results}</strong></div>
+              {Object.entries(summary.status_counts || {}).map(([s, c]) => (
+                <div key={s}><span className="muted">{s}</span><strong>{c}</strong></div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <section className="panel section-block">
+          <div className="panel-title-row">
+            <div>
+              <span className="panel-kicker">Matrix</span>
+              <h2>Comparison Results</h2>
+            </div>
+            {hasResults && <span className="count-pill">{results.length}</span>}
+          </div>
+
+          {hasResults ? (
+            <div className="comparison-table">
+              <div className="comparison-table__head">
+                <span>Spec ID</span>
+                <span>Vendor ID</span>
+                <span>Status</span>
+              </div>
+              {results.map((row) => (
+                <div className="comparison-table__row" key={`${row.spec_id}-${row.vendor_id}`}>
+                  <strong>{row.spec_id}</strong>
+                  <span>{row.vendor_id}</span>
+                  <span className={`verdict verdict-${normalizeVerdict(row.status)}`}>
+                    {row.status}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="placeholder-card placeholder-card--wide">
+              <div className="placeholder-icon">📈</div>
+              <p>No comparison data available yet.</p>
+              <span>Upload documents and run the pipeline from Dashboard to generate vendor comparison results</span>
+            </div>
+          )}
+        </section>
+
+        {outputFiles.length > 0 && (
           <section className="panel section-block">
             <div className="row-between">
               <div>
                 <span className="panel-kicker">Export</span>
-                <h2>Downloads</h2>
+                <h2>Download Reports</h2>
               </div>
               <button className="solid-button compact-button" type="button"
-                onClick={handleDownloadAll} disabled={busy || !outputFiles.length}>
+                onClick={handleDownloadAll} disabled={busy}>
                 ⬇ Download All (ZIP)
               </button>
             </div>
-            {outputFiles.length ? (
-              <div className="file-table">
-                {outputFiles.map((f) => {
-                  const isVendor = f.file_name.startsWith('vendor_') &&
-                    f.file_name !== 'vendor_comparison_matrix.xlsx'
-                  const vendorId = isVendor
-                    ? f.file_name.replace(/^vendor_/, '').replace(/\.xlsx$/, '') : null
-                  return (
-                    <div className="file-row" key={f.file_name}>
-                      <strong>{f.file_name}</strong>
-                      <span>{fmtSize(f.size_bytes)}</span>
-                      <span className="muted inline-muted">{fmtDate(f.modified_at)}</span>
-                      <div className="row-actions">
-                        <button className="plain-button compact-button" type="button" disabled={busy}
-                          onClick={() => isVendor
-                            ? handleDownloadVendor(vendorId)
-                            : handleDownloadReport()}>
-                          ⬇ Download
-                        </button>
-                      </div>
+            <div className="file-table" style={{ marginTop: '12px' }}>
+              {outputFiles.map((f) => {
+                const isVendor = f.file_name.startsWith('vendor_') &&
+                  f.file_name !== 'vendor_comparison_matrix.xlsx'
+                const vendorId = isVendor
+                  ? f.file_name.replace(/^vendor_/, '').replace(/\.xlsx$/, '') : null
+                return (
+                  <div className="file-row" key={f.file_name}>
+                    <strong>{f.file_name}</strong>
+                    <span>{fmtSize(f.size_bytes)}</span>
+                    <span className="muted inline-muted">{fmtDate(f.modified_at)}</span>
+                    <div className="row-actions">
+                      <button className="plain-button compact-button" type="button" disabled={busy}
+                        onClick={() => isVendor ? handleDownloadVendor(vendorId) : handleDownloadReport()}>
+                        ⬇ Download
+                      </button>
                     </div>
-                  )
-                })}
+                  </div>
+                )
+              })}
+            </div>
+          </section>
+        )}
+
+        {(message || error) && (
+          <section className="section-block status-block">
+            {message && <div className="message success">{message}</div>}
+            {error   && <div className="message error">{error}</div>}
+          </section>
+        )}
+      </div>
+    )
+  }
+
+  function renderSettingsPage() {
+    return (
+      <div className="page-content">
+        <div className="page-header">
+          <p className="eyebrow">Preferences</p>
+          <h1>Settings</h1>
+          <p className="page-subtitle">Theme, backend configuration, and LLM status.</p>
+        </div>
+
+        <div className="settings-grid">
+          <div className="panel">
+            <div className="panel-title-row">
+              <div>
+                <span className="panel-kicker">Appearance</span>
+                <h2>Theme</h2>
+              </div>
+            </div>
+            <div className="setting-row">
+              <div className="setting-row__info">
+                <strong>Dark Mode</strong>
+                <p>Switch between light and dark interface theme. Persists during your current session.</p>
+              </div>
+              <button
+                type="button"
+                className={`toggle-switch ${darkMode ? 'toggle-switch--on' : ''}`}
+                onClick={() => setDarkMode(d => !d)}
+                aria-label="Toggle dark mode"
+                role="switch"
+                aria-checked={darkMode}
+              >
+                <span className="toggle-thumb" />
+              </button>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="panel-title-row">
+              <div>
+                <span className="panel-kicker">Backend</span>
+                <h2>API Configuration</h2>
+              </div>
+            </div>
+            <div className="setting-info-row">
+              <span className="field-label" style={{ marginTop: 0 }}>API Base URL</span>
+              <div className="api-chip api-chip--block">{API_BASE}</div>
+            </div>
+          </div>
+
+          <div className="panel">
+            <div className="panel-title-row">
+              <div>
+                <span className="panel-kicker">LLM</span>
+                <h2>Language Model Status</h2>
+              </div>
+              {ollamaStatus && (
+                <div className={`ollama-chip ${ollamaStatus.healthy ? 'ollama-ok' : 'ollama-down'}`}>
+                  <span className="ollama-dot" />
+                  {ollamaStatus.healthy ? 'Online' : 'Offline'}
+                </div>
+              )}
+            </div>
+            {ollamaStatus ? (
+              <div className="settings-info-block">
+                <div className="settings-info-row">
+                  <span className="muted">Status</span>
+                  <strong>{ollamaStatus.healthy ? 'Reachable' : 'Not reachable'}</strong>
+                </div>
+                {ollamaStatus.host && (
+                  <div className="settings-info-row">
+                    <span className="muted">Host</span>
+                    <strong>{ollamaStatus.host}</strong>
+                  </div>
+                )}
+                {ollamaStatus.selected_model && (
+                  <div className="settings-info-row">
+                    <span className="muted">Selected Model</span>
+                    <strong>{ollamaStatus.selected_model}</strong>
+                  </div>
+                )}
+                {ollamaStatus.models?.length > 0 && (
+                  <div className="settings-info-row">
+                    <span className="muted">Available Models</span>
+                    <strong>{ollamaStatus.models.join(', ')}</strong>
+                  </div>
+                )}
               </div>
             ) : (
-              <div className="empty-line">No output files yet. Run the pipeline first.</div>
+              <div className="empty-line">Loading LLM status…</div>
             )}
-          </section>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
-          {/* ── messages ── */}
-          {(message || error) && (
-            <section className="section-block status-block">
-              {message && <div className="message success">{message}</div>}
-              {error   && <div className="message error">{error}</div>}
-            </section>
+  /* ── render ── */
+  return (
+    <div className={`app-root ${darkMode ? 'dark-mode' : ''}`}>
+      {/* fixed left navigation sidebar */}
+      <nav className={`nav-sidebar ${sidebarCollapsed ? 'nav-sidebar--collapsed' : ''}`} aria-label="Main navigation">
+        <div className="nav-brand">
+          <div className="nav-brand__logo">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <path d="M9 3H5a2 2 0 0 0-2 2v4m6-6h10a2 2 0 0 1 2 2v4M9 3v18m0 0h10a2 2 0 0 0 2-2V9M9 21H5a2 2 0 0 1-2-2V9m0 0h18" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            </svg>
+          </div>
+          {!sidebarCollapsed && (
+            <div className="nav-brand__text">
+              <span className="nav-brand__name">TenderAI</span>
+              <span className="nav-brand__sub">Compliance Suite</span>
+            </div>
           )}
+          <button
+            type="button"
+            className="nav-collapse-btn"
+            onClick={() => setSidebarCollapsed(c => !c)}
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              {sidebarCollapsed
+                ? <><polyline points="9 18 15 12 9 6"/></>
+                : <><polyline points="15 18 9 12 15 6"/></>
+              }
+            </svg>
+          </button>
+        </div>
 
-        </main>
+        <div className="nav-items">
+          {navItems.map(item => (
+            <button
+              key={item.id}
+              type="button"
+              className={`nav-item ${activePage === item.id ? 'nav-item--active' : ''}`}
+              onClick={() => setActivePage(item.id)}
+              title={sidebarCollapsed ? item.label : undefined}
+            >
+              <span className="nav-item__icon">{item.icon}</span>
+              {!sidebarCollapsed && <span className="nav-item__label">{item.label}</span>}
+              {activePage === item.id && <span className="nav-item__indicator" />}
+            </button>
+          ))}
+        </div>
+
+        {!sidebarCollapsed && (
+          <div className="nav-footer">
+            <div className={`nav-status-dot ${ollamaStatus?.healthy ? 'nav-status-dot--ok' : 'nav-status-dot--off'}`} />
+            <span>{ollamaStatus?.healthy ? 'LLM connected' : 'LLM offline'}</span>
+          </div>
+        )}
+      </nav>
+
+      {/* main content area */}
+      <div className="app-content">
+        {activePage === 'dashboard'  && renderDashboard()}
+        {activePage === 'documents'  && renderDocumentsPage()}
+        {activePage === 'comparison' && renderComparisonPage()}
+        {activePage === 'settings'   && renderSettingsPage()}
       </div>
     </div>
   )
